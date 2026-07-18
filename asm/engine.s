@@ -7,21 +7,126 @@
 
         .include "defs.inc"
 
+        .import __LCCODE_LOAD__, __LCCODE_RUN__, __LCCODE_SIZE__
+
         .segment "CODE"
 
 entry:
         ldx #$FF
         txs
+        ; install the LC-resident code (aux-read primitives): bank 1
+        ; RAM, write-enabled by the double read
+        lda $C08B
+        lda $C08B
+        lda #<__LCCODE_LOAD__
+        sta ZPTR
+        lda #>__LCCODE_LOAD__
+        sta ZPTR+1
+        lda #<__LCCODE_RUN__
+        sta TTPTR
+        lda #>__LCCODE_RUN__
+        sta TTPTR+1
+        ldx #>(__LCCODE_SIZE__ + 255)
+        ldy #0
+ldloop: lda (ZPTR),y
+        sta (TTPTR),y
+        iny
+        bne ldloop
+        inc ZPTR+1
+        inc TTPTR+1
+        dex
+        bne ldloop
+        lda #0
+        sta PSP0
+        sta PSP1
+        sta GENCAPS
+        sta ABORT
+        sta NODECNT
+        jsr evalinit
+        lda #NOSQ
+        sta BESTFROM
+        ; depth cap; MAXDEPTH becomes the per-iteration depth
+        lda MAXDEPTH
+        sta MAXCAP
+        ; hard-abort limit = 2x budget
+        lda BUDGET0
+        asl
+        sta ABORTL0
+        lda BUDGET1
+        rol
+        sta ABORTL1
+        lda BUDGET2
+        rol
+        sta ABORTL2
+        ; fixed-depth mode (budget 0): one iteration at the cap
+        lda BUDGET0
+        ora BUDGET1
+        ora BUDGET2
+        bne idmode
+        lda MAXCAP
+        sta CURDEPTH
+        jsr iterate
+        jmp report
+idmode: lda #1
+        sta CURDEPTH
+idloop: jsr iterate
+        lda ABORT
+        beq idok
+        ; aborted mid-iteration: keep this iteration's best only if one
+        ; exists (a completed root move); else the previous iteration's
+        lda BESTFROM
+        cmp #NOSQ
+        bne report
+        lda PREVFROM
+        sta BESTFROM
+        lda PREVTO
+        sta BESTTO
+        lda PREVFLAGS
+        sta BESTFLAGS
+        jmp report
+idok:   ; don't start another iteration past half the budget
+        lda BUDGET2
+        lsr
+        sta T2
+        lda BUDGET1
+        ror
+        sta T1
+        lda BUDGET0
+        ror
+        sta T0
+        lda CLOCK_TRAP
+        cmp T0
+        lda CLOCK_TRAP+1
+        sbc T1
+        lda CLOCK_TRAP+2
+        sbc T2
+        bcs report              ; spent >= budget/2
+        inc CURDEPTH
+        lda CURDEPTH
+        cmp MAXCAP
+        bcc idloop
+        beq idloop
+        jmp report
+
+; iterate: run one full-window search at CURDEPTH, saving the previous
+; iteration's best move first.
+iterate:
+        lda BESTFROM
+        sta PREVFROM
+        lda BESTTO
+        sta PREVTO
+        lda BESTFLAGS
+        sta PREVFLAGS
+        lda #NOSQ
+        sta BESTFROM
+        lda CURDEPTH
+        sta MAXDEPTH
+        lda #0
+        sta PLY
         lda #<MOVESTACK
         sta MSP
         lda #>MOVESTACK
         sta MSP+1
-        lda #0
-        sta PLY
-        sta PSP0
-        sta PSP1
-        sta GENCAPS
-        jsr evalinit
         lda #<(-INF)
         sta ALPHALO
         lda #>(-INF)
@@ -30,10 +135,9 @@ entry:
         sta BETALO
         lda #>INF
         sta BETAHI
-        lda #NOSQ
-        sta BESTFROM
-        jsr search
-        lda BESTFROM
+        jmp search              ; rts returns to iterate's caller
+
+report: lda BESTFROM
         cmp #NOSQ
         beq nomove
         jsr printsq
@@ -87,6 +191,7 @@ nonetxt:
         .byte "none", $0A, 0
 
         .include "search.s"
+        .include "tt.s"
         .include "eval.s"
         .include "board.s"
         .include "movegen.s"

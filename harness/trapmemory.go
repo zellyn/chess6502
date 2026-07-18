@@ -14,14 +14,30 @@ import (
 // the aux bank) are ordinary memory writes and never fire a trap. Peek is
 // promoted from the embedded *iie.Memory unchanged, so memory dumps remain
 // side-effect free.
+// Read traps (all main-bank, like the store traps; fixed addresses per
+// docs/testing.md):
+//
+//	InAddr ($BFF1): pop and return the next input byte (0 if none)
+//	InStatusAddr ($BFF2): $80 if input is waiting, else 0. Reading with
+//	    an empty buffer also sets the WaitingForInput flag, which makes
+//	    Machine.Run return so a driving process can supply input.
+//	ClockAddr ($BFF4-$BFF6): cycle count / 256, 24 bits little-endian,
+//	    latched when the low byte ($BFF4) is read.
 type TrapMemory struct {
 	*iie.Memory
 	CoutAddr uint16
 	ExitAddr uint16
 	Cout     io.Writer
 
-	exited   bool
-	exitCode byte
+	InAddr       uint16
+	InStatusAddr uint16
+	ClockAddr    uint16
+	Input        []byte // pending input; append via Machine.SendInput
+
+	exited       bool
+	exitCode     byte
+	waitingInput bool
+	clockLatch   [3]byte
 }
 
 // Write implements cpu.Memory, applying the harness's store traps before
@@ -40,6 +56,39 @@ func (t *TrapMemory) Write(addr uint16, val byte) {
 		}
 	}
 	t.Memory.Write(addr, val)
+}
+
+// Read implements cpu.Memory, applying the read traps (main-bank reads
+// only) before delegating to the underlying iie.Memory.
+func (t *TrapMemory) Read(addr uint16) byte {
+	if !t.Memory.RamRd && t.InAddr != 0 {
+		switch addr {
+		case t.InAddr:
+			if len(t.Input) == 0 {
+				return 0
+			}
+			b := t.Input[0]
+			t.Input = t.Input[1:]
+			return b
+		case t.InStatusAddr:
+			if len(t.Input) == 0 {
+				t.waitingInput = true
+				return 0
+			}
+			return 0x80
+		case t.ClockAddr:
+			if t.Memory.Clock != nil {
+				c := t.Memory.Clock() >> 8
+				t.clockLatch = [3]byte{byte(c), byte(c >> 8), byte(c >> 16)}
+			}
+			return t.clockLatch[0]
+		case t.ClockAddr + 1:
+			return t.clockLatch[1]
+		case t.ClockAddr + 2:
+			return t.clockLatch[2]
+		}
+	}
+	return t.Memory.Read(addr)
 }
 
 // Exited reports whether the exit trap has fired.

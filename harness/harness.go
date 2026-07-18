@@ -60,6 +60,13 @@ type Config struct {
 	// Cout receives bytes stored to CoutAddr. If nil, they are discarded.
 	Cout io.Writer
 
+	// InAddr/InStatusAddr/ClockAddr enable the read traps (input byte,
+	// input status, latched cycle counter — see TrapMemory). Zero
+	// disables all three.
+	InAddr       uint16
+	InStatusAddr uint16
+	ClockAddr    uint16
+
 	// Trace, if true, prints each executed instruction to stderr (a
 	// behavior of the underlying go6502/cpu package, which traces
 	// unconditionally to os.Stderr regardless of other I/O routing).
@@ -90,10 +97,13 @@ func New(cfg Config) (*Machine, error) {
 	}
 
 	mem := &TrapMemory{
-		Memory:   iie.New(),
-		CoutAddr: cfg.CoutAddr,
-		ExitAddr: cfg.ExitAddr,
-		Cout:     cfg.Cout,
+		Memory:       iie.New(),
+		CoutAddr:     cfg.CoutAddr,
+		ExitAddr:     cfg.ExitAddr,
+		Cout:         cfg.Cout,
+		InAddr:       cfg.InAddr,
+		InStatusAddr: cfg.InStatusAddr,
+		ClockAddr:    cfg.ClockAddr,
 	}
 	if cfg.ROM != nil {
 		copy(mem.ROM[:], cfg.ROM)
@@ -119,12 +129,23 @@ func New(cfg Config) (*Machine, error) {
 // of the cycles already run, so calling Run again after it returns with
 // exited == false and err == nil continues exactly where the previous call
 // left off.
+// Run also returns (with exited == false) when the program polls the
+// input-status trap while no input is pending — check WaitingForInput,
+// supply bytes with SendInput, and call Run again to continue.
 func (m *Machine) Run(maxCycles uint64) (exited bool, exitCode byte, err error) {
 	limit := m.Cycles + maxCycles
-	for !m.Mem.exited && m.Cycles < limit {
+	m.Mem.waitingInput = false
+	for !m.Mem.exited && m.Cycles < limit && !m.Mem.waitingInput {
 		if stepErr := m.CPU.Step(); stepErr != nil {
 			return false, 0, stepErr
 		}
 	}
 	return m.Mem.exited, m.Mem.exitCode, nil
 }
+
+// WaitingForInput reports whether the last Run returned because the
+// program polled the input-status trap with an empty input buffer.
+func (m *Machine) WaitingForInput() bool { return m.Mem.waitingInput }
+
+// SendInput appends bytes to the input buffer served by the input trap.
+func (m *Machine) SendInput(data []byte) { m.Mem.Input = append(m.Mem.Input, data...) }

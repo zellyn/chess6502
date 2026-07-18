@@ -148,12 +148,15 @@ func ParseFEN(fen string) (*Position, error) {
 // the position poked into memory, ready to run.
 func NewMachine(bin []byte, defs Defs, pos *Position, depth byte, cout io.Writer) (*harness.Machine, error) {
 	m, err := harness.New(harness.Config{
-		Bin:      bin,
-		Org:      0x4000,
-		Entry:    0x4000,
-		CoutAddr: 0xBFF0,
-		ExitAddr: 0xBFFF,
-		Cout:     cout,
+		Bin:          bin,
+		Org:          0x4000,
+		Entry:        0x4000,
+		CoutAddr:     0xBFF0,
+		ExitAddr:     0xBFFF,
+		InAddr:       0xBFF1,
+		InStatusAddr: 0xBFF2,
+		ClockAddr:    0xBFF4,
+		Cout:         cout,
 	})
 	if err != nil {
 		return nil, err
@@ -179,13 +182,27 @@ type SearchResult struct {
 // SearchMove runs the engine binary over the position at fixed depth
 // MAXDEPTH and returns the chosen move and score.
 func SearchMove(bin []byte, defs Defs, pos *Position, depth byte, maxCycles uint64) (*SearchResult, error) {
+	return SearchBudget(bin, defs, pos, depth, 0, maxCycles)
+}
+
+// SearchBudget runs the engine with iterative deepening under a cycle
+// budget (in cycles; converted to the engine's 256-cycle units), capped
+// at depth maxDepth. budget 0 = fixed-depth mode.
+func SearchBudget(bin []byte, defs Defs, pos *Position, maxDepth byte, budget uint64, maxCycles uint64) (*SearchResult, error) {
 	var cout bytes.Buffer
 	m, err := NewMachine(bin, defs, pos, 0, &cout)
 	if err != nil {
 		return nil, err
 	}
-	m.Mem.Main[defs["MAXDEPTH"]] = depth
+	m.Mem.Main[defs["MAXDEPTH"]] = maxDepth
 	m.Mem.Main[defs["HALFMOVE"]] = pos.Halfmove
+	b := budget >> 8
+	if b > 0xFFFFFF {
+		b = 0xFFFFFF
+	}
+	m.Mem.Main[defs["BUDGET0"]] = byte(b)
+	m.Mem.Main[defs["BUDGET1"]] = byte(b >> 8)
+	m.Mem.Main[defs["BUDGET2"]] = byte(b >> 16)
 
 	exited, code, err := m.Run(maxCycles)
 	if err != nil {

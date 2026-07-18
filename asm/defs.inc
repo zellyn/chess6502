@@ -105,6 +105,28 @@ HASH1     = $DE
 HASH2     = $DF
 HASH3     = $E0
 ZPTR      = $E1         ; 16-bit: Zobrist plane pointer
+BUDGET0   = $E3         ; 24-bit soft time budget in 256-cycle units,
+BUDGET1   = $E4         ;  poked by the rig; 0 = fixed-depth mode
+BUDGET2   = $E5
+ABORTL0   = $E6         ; hard-abort limit (2x budget), computed at entry
+ABORTL1   = $E7
+ABORTL2   = $E8
+ABORT     = $E9         ; nonzero: unwind the search immediately
+NODECNT   = $EA         ; clock-poll divider (poll every 256 nodes)
+CURDEPTH  = $EB         ; iterative-deepening iteration depth
+MAXCAP    = $EC         ; depth cap (poked MAXDEPTH moves here at entry)
+PREVFROM  = $ED         ; previous completed iteration's best move
+PREVTO    = $EE
+PREVFLAGS = $EF
+TTPTR     = $F0         ; 16-bit: aux address of the current TT entry
+TTENTRY   = $F2         ; 8-byte staging copy of a TT entry:
+                        ;  +0..2 verify (HASH1-3), +3 from, +4 to,
+                        ;  +5/6 score LE, +7 depth<<2 | bound
+
+; TT bound codes (in entry byte 7, low 2 bits; 0 = empty entry)
+TT_UPPER = 1
+TT_LOWER = 2
+TT_EXACT = 3
 
 INF       = 32000
 MATE      = 30000
@@ -146,10 +168,21 @@ HASHSTK0   = $0B80      ; hash of the position at each ply (saved by make;
 HASHSTK1   = $0BA0      ;  doubles as the unmake restore source and the
 HASHSTK2   = $0BC0      ;  repetition-scan history)
 HASHSTK3   = $0BE0
+TTFROMA    = $0C00      ; TT move for this ply (NOSQ = none): searched first
+TTTOA      = $0C20
+TTBF       = $0C40      ; best move found at this ply (for the TT store)
+TTBT       = $0C60
+RAISED     = $0C80      ; nonzero: alpha was raised at this ply (EXACT bound)
 
-MOVESTACK  = $0C00      ; 3 bytes/move (from,to,flags); through $1FFF
+MOVESTACK  = $0D00      ; 3 bytes/move (from,to,flags); through $1FFF
 MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this
 
+; Transposition table: 4096 x 8 bytes in AUX $0200-$81FF (see D6).
+TTBASE     = $0200
+
 ; ---- Harness I/O (plain RAM on real hardware; see docs/testing.md) ----
-COUT_TRAP = $BFF0
-EXIT_TRAP = $BFFF
+COUT_TRAP   = $BFF0
+IN_TRAP     = $BFF1     ; read: next input byte (0 if none)
+INSTAT_TRAP = $BFF2     ; read: $80 if input waiting
+CLOCK_TRAP  = $BFF4     ; read: cycles/256, 3 bytes LE, latched on low read
+EXIT_TRAP   = $BFFF

@@ -45,10 +45,39 @@ curincheck:
         jmp attacked
 
 ; ---------------------------------------------------------------
+; checkclock: poll the harness clock; set ABORT once cycles reach the
+; hard limit (2x budget). No-op in fixed-depth mode (budget 0).
+; ---------------------------------------------------------------
+checkclock:
+        lda BUDGET0
+        ora BUDGET1
+        ora BUDGET2
+        beq ccout
+        lda CLOCK_TRAP          ; latches all three bytes
+        cmp ABORTL0
+        lda CLOCK_TRAP+1
+        sbc ABORTL1
+        lda CLOCK_TRAP+2
+        sbc ABORTL2
+        bcc ccout               ; still under the limit
+        lda #1
+        sta ABORT
+ccout:  rts
+
+; ---------------------------------------------------------------
 ; search
 ; ---------------------------------------------------------------
 search:
-        lda PLY
+        inc NODECNT
+        bne :+
+        jsr checkclock
+:       lda ABORT
+        beq :+
+        lda #0                  ; aborting: unwind with a dummy score
+        sta SCORE
+        sta SCORE+1
+        rts
+:       lda PLY
         cmp #MAXPLY-1
         bcc :+
         jmp eval                ; hard ply cap: static eval
@@ -122,12 +151,78 @@ sdrawend:
         ldy PLY
         lda #0
         sta LEGALCNT,y
-        sta PASSNO,y
         sta QSKIND,y
+        sta RAISED,y
+        lda #NOSQ
+        sta TTFROMA,y
+        sta TTBF,y
         lda PLY
         cmp MAXDEPTH
-        bcc snode               ; full-width node
-        ; quiescence entry
+        bcs squiesce            ; quiescence entry below
+        ; full-width node: probe the transposition table
+        jsr ttprobe
+        bcc snodej
+        ldy PLY
+        lda TTENTRY+3
+        sta TTFROMA,y           ; TT move: searched first (pass 0)
+        lda TTENTRY+4
+        sta TTTOA,y
+        ; cutoff allowed if stored depth >= remaining depth, not at root
+        lda PLY
+        beq snodej
+        lda TTENTRY+7
+        lsr
+        lsr
+        sta T0
+        lda MAXDEPTH
+        sec
+        sbc PLY
+        cmp T0
+        bcc ttcut               ; remaining < stored depth
+        beq ttcut               ; equal: cutoff ok
+snodej: jmp snode               ; otherwise ordering only
+ttcut:  lda TTENTRY+7
+        and #$03
+        cmp #TT_EXACT
+        beq ttexact
+        cmp #TT_LOWER
+        beq ttlower
+        ; upper bound: usable if score <= alpha
+        sec
+        lda TTENTRY+5
+        sbc ALPHALO,y
+        lda TTENTRY+6
+        sbc ALPHAHI,y
+        bvc :+
+        eor #$80
+:       bpl snode               ; score > alpha: not usable
+        lda ALPHALO,y
+        sta SCORE
+        lda ALPHAHI,y
+        sta SCORE+1
+        rts
+ttlower:                        ; usable if score >= beta
+        sec
+        lda TTENTRY+5
+        sbc BETALO,y
+        lda TTENTRY+6
+        sbc BETAHI,y
+        bvc :+
+        eor #$80
+:       bmi snode               ; score < beta: not usable
+        lda BETALO,y
+        sta SCORE
+        lda BETAHI,y
+        sta SCORE+1
+        rts
+ttexact:
+        lda TTENTRY+5
+        sta SCORE
+        lda TTENTRY+6
+        sta SCORE+1
+        rts
+
+squiesce:
         jsr curincheck
         bcs snode               ; in check: full evasion node
         ldy PLY
@@ -169,6 +264,18 @@ snode:  ldy PLY
         jsr gennode
         lda #0
         sta GENCAPS
+        ; initial pass: 0 (TT move first) when we have one and this is
+        ; not a qs-capture node; else straight to pass 1
+        ldy PLY
+        ldx #1
+        lda QSKIND,y
+        bne :+
+        lda TTFROMA,y
+        cmp #NOSQ
+        beq :+
+        ldx #0
+:       txa
+        sta PASSNO,y
 sloop:  ldy PLY
         lda CURSORLO,y
         cmp PLYENDLO,y
@@ -176,15 +283,22 @@ sloop:  ldy PLY
         lda CURSORHI,y
         cmp PLYENDHI,y
         bne sfetch
-        ; end of list: run pass 1 unless done or qs-captures-only
+        ; end of list: pass 0 -> 1; 1 -> 2 (qs-capture nodes stop); 2 -> done
         lda PASSNO,y
-        beq :+
+        cmp #2
+        bcc :+
         jmp sdone
-:       lda QSKIND,y
-        beq :+
+:       cmp #1
+        bne spass1
+        lda QSKIND,y
+        beq spass2
         jmp sdone
-:       lda #1
+spass1: lda #1
         sta PASSNO,y
+        bne spassgo             ; always
+spass2: lda #2
+        sta PASSNO,y
+spassgo:
         lda PLYBASELO,y
         sta CURSORLO,y
         lda PLYBASEHI,y
@@ -212,21 +326,41 @@ sfetch: lda CURSORLO,y
         iny
         lda (CURPTR),y
         sta MVFLAGS
-        ; classify: capture/promotion vs quiet
+        ; pass 0: search only the TT move; passes 1/2 skip it
+        ldy PLY
+        lda PASSNO,y
+        bne snotp0
+        lda FROM
+        cmp TTFROMA,y
+        bne sloopj
+        lda TO
+        cmp TTTOA,y
+        bne sloopj
+        jmp sdomove
+snotp0: ldx TTFROMA,y
+        cpx #NOSQ
+        beq snotttm
+        cpx FROM
+        bne snotttm
+        ldx TTTOA,y
+        cpx TO
+        bne snotttm
+        jmp sloop               ; the TT move: already searched in pass 0
+snotttm:
+        ; captures/promotions in pass 1, quiets in pass 2
         ldx TO
         lda BOARD,x
         bne siscap
         lda MVFLAGS
         and #FL_EP|FL_PROMO
         bne siscap
-        ; quiet: only in pass 1
-        ldy PLY
         lda PASSNO,y
-        beq sloopj              ; pass 0: skip
-        bne sdomove             ; always
-siscap: ldy PLY
-        lda PASSNO,y
-        bne sloopj              ; pass 1: already searched
+        cmp #2
+        bne sloopj              ; quiets only in pass 2
+        beq sdomove             ; always
+siscap: lda PASSNO,y
+        cmp #2
+        beq sloopj              ; captures were pass 1
         ; qs nodes: queen promotions only
         lda QSKIND,y
         beq sdomove
@@ -294,6 +428,16 @@ slegal: ldy PLY                 ; PLY = child here
         sta SCORE
         lda BETAHI,y
         sta SCORE+1
+        lda QSKIND,y            ; TT: lower bound + the cutting move
+        bne sbetapop
+        jsr setmove3
+        lda SCORE
+        sta TTENTRY+5
+        lda SCORE+1
+        sta TTENTRY+6
+        lda #TT_LOWER
+        jsr ttstore
+sbetapop:
         jmp spop
 snocut: ; alpha improvement? (strict >)
         sec
@@ -303,37 +447,37 @@ snocut: ; alpha improvement? (strict >)
         sbc SCORE+1
         bvc :+
         eor #$80
-:       bpl sloopj              ; ALPHA >= SCORE
-        lda SCORE
+:       bmi :+                  ; SCORE > ALPHA: improvement
+        jmp sloop
+:       lda SCORE
         sta ALPHALO,y
         lda SCORE+1
         sta ALPHAHI,y
+        ; record this move (cursor was already advanced by 3)
+        lda #1
+        sta RAISED,y
+        jsr setmove3
+        ldy PLY
+        lda TTENTRY+3
+        sta TTBF,y
+        lda TTENTRY+4
+        sta TTBT,y
         cpy #0
         beq :+
         jmp sloop
-:       ; root: remember the move (cursor was already advanced by 3)
-        lda CURSORLO,y
-        sec
-        sbc #3
-        sta CURPTR
-        lda CURSORHI,y
-        sbc #0
-        sta CURPTR+1
-        ldy #0
-        lda (CURPTR),y
+:       lda TTENTRY+3           ; root: also for the driver
         sta BESTFROM
-        iny
-        lda (CURPTR),y
+        lda TTENTRY+4
         sta BESTTO
-        iny
-        lda (CURPTR),y
+        ldy #2
+        lda (CURPTR),y          ; setmove3 left CURPTR at the move
         sta BESTFLAGS
         jmp sloop
 
 sdone:  ; return alpha; full-width nodes with no legal moves: mate/stalemate
         ldy PLY
         lda QSKIND,y
-        bne sret
+        bne sretqs
         lda LEGALCNT,y
         bne sret
         jsr curincheck
@@ -341,7 +485,7 @@ sdone:  ; return alpha; full-width nodes with no legal moves: mate/stalemate
         lda #0                  ; stalemate
         sta SCORE
         sta SCORE+1
-        jmp spop
+        beq sterm               ; always
 smated: lda PLY                 ; SCORE = PLY - MATE (mated here)
         sec
         sbc #<MATE
@@ -349,8 +493,37 @@ smated: lda PLY                 ; SCORE = PLY - MATE (mated here)
         lda #0
         sbc #>MATE
         sta SCORE+1
+sterm:  lda #NOSQ               ; TT: exact, no move
+        sta TTENTRY+3
+        sta TTENTRY+4
+        lda SCORE
+        sta TTENTRY+5
+        lda SCORE+1
+        sta TTENTRY+6
+        lda #TT_EXACT
+        jsr ttstore
         jmp spop
 sret:   ldy PLY
+        lda ALPHALO,y
+        sta SCORE
+        lda ALPHAHI,y
+        sta SCORE+1
+        ; TT: exact if alpha was raised here, else upper bound
+        lda TTBF,y
+        sta TTENTRY+3
+        lda TTBT,y
+        sta TTENTRY+4
+        lda SCORE
+        sta TTENTRY+5
+        lda SCORE+1
+        sta TTENTRY+6
+        lda #TT_UPPER
+        ldx RAISED,y
+        beq :+
+        lda #TT_EXACT
+:       jsr ttstore
+        jmp spop
+sretqs: ldy PLY
         lda ALPHALO,y
         sta SCORE
         lda ALPHAHI,y
@@ -360,4 +533,23 @@ spop:   ldy PLY
         sta MSP
         lda PLYBASEHI,y
         sta MSP+1
+        rts
+
+; setmove3: TTENTRY+3/4 = the from/to of the move at cursor[PLY] - 3
+; (the move just searched; the cursor advances before make).
+setmove3:
+        ldy PLY
+        lda CURSORLO,y
+        sec
+        sbc #3
+        sta CURPTR
+        lda CURSORHI,y
+        sbc #0
+        sta CURPTR+1
+        ldy #0
+        lda (CURPTR),y
+        sta TTENTRY+3
+        iny
+        lda (CURPTR),y
+        sta TTENTRY+4
         rts
