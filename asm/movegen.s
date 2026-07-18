@@ -5,20 +5,15 @@
 
 ; ---------------------------------------------------------------
 ; emitmove: A = flags; GFROM/GTO = squares. Advances MSP.
-; With GENCAPS set, quiet moves are dropped (quiescence generation).
+; CONTRACT: with GENCAPS set, callers must not call this for quiet
+; moves — every quiet call site gates on GENCAPS itself, and every
+; ungated site (captures, ep, promotions including promo pushes) is
+; always kept in quiescence. A new quiet call site must bring its
+; own GENCAPS gate. The overflow check lives on the page-cross path:
+; MSP+1 can only reach >MOVESTACKTOP via a carry out of the bump.
 ; ---------------------------------------------------------------
 emitmove:
-        ldx GENCAPS
-        beq emgo
-        sta DIFF                ; scratch; attacked() is not active here
-        and #FL_EP|FL_PROMO
-        bne emkeep              ; ep/promotion: keep
-        ldx GTO
-        lda BOARD,x
-        bne emkeep              ; capture: keep
-        rts                     ; quiet: drop
-emkeep: lda DIFF
-emgo:   ldy #2
+        ldy #2
         sta (MSP),y
         dey
         lda GTO
@@ -30,14 +25,15 @@ emgo:   ldy #2
         clc
         adc #3
         sta MSP
-        bcc emok
-        inc MSP+1
-emok:   lda MSP+1
+        bcs empage
+        rts
+empage: inc MSP+1
+        lda MSP+1
         cmp #>MOVESTACKTOP
-        bcc emok2
+        bcc :+
         lda #100                ; move-stack overflow: abort the run
         sta EXIT_TRAP
-emok2:  rts
+:       rts
 
 ; ---------------------------------------------------------------
 ; generate: all pseudo-legal moves for SIDE.

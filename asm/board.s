@@ -80,23 +80,6 @@ athit:  sec
         rts
 
 ; ---------------------------------------------------------------
-; slotof: A = piece byte -> Y = slot in PIECESQ. Clobbers A, GTMP.
-; slot = index | (color ? 16 : 0)
-; ---------------------------------------------------------------
-slotof: sta GTMP
-        and #COLORMASK
-        asl                     ; 0 or $10
-        sta CAPSLOT
-        lda GTMP
-        lsr
-        lsr
-        lsr
-        lsr
-        ora CAPSLOT
-        tay
-        rts
-
-; ---------------------------------------------------------------
 ; make: play FROM/TO/MVFLAGS. Saves undo state indexed by PLY,
 ; updates board, piece lists, castling rights, ep, side; PLY++.
 ; Clobbers A,X,Y and most scratch.
@@ -168,19 +151,19 @@ mkhavecap:
         sta UNDOCAP,x
         beq mknocap
         ; remove victim: hash+eval out, clear square, tombstone list slot
-        pha
+        sta VICTIM
 .ifndef NOEVAL
         jsr hashpiece           ; A = victim, Y = capture square (kept)
-        pla
-        pha
+        lda VICTIM
         jsr rempiece
         ldx PLY
 .endif
         ldy UNDOCAPSQ,x
         lda #0
         sta a:BOARD,y
-        pla
-        jsr slotof
+        ldy VICTIM
+        lda SLOTTAB,y
+        tay
         lda #NOSQ
         sta PIECESQ,y
 mknocap:
@@ -231,8 +214,9 @@ mkplace:
         lda CRTMP
         jsr addpiece            ; hashpiece preserved Y = TO
 .endif
-        lda CRTMP
-        jsr slotof
+        ldy CRTMP
+        lda SLOTTAB,y
+        tay
         lda TO
         sta PIECESQ,y
 
@@ -468,8 +452,9 @@ crgo:   sta GTO
         ldy GTO
         lda CRTMP
         sta a:BOARD,y
-        lda CRTMP
-        jsr slotof              ; A = rook byte -> Y = slot
+        ldy CRTMP
+        lda SLOTTAB,y           ; rook byte -> slot
+        tay
         lda GTO
         sta PIECESQ,y
         rts
@@ -509,7 +494,9 @@ ucgo:   sta GTO
         ldy GTO
         lda CRTMP
         sta a:BOARD,y
-        jsr slotof              ; A = rook byte -> Y = slot
+        ldy CRTMP
+        lda SLOTTAB,y           ; rook byte -> slot
+        tay
         lda GTO
         sta PIECESQ,y
         rts
@@ -561,7 +548,9 @@ unmake:
         lda UNDOPIECE,x
         ldy UNDOFROM,x
         sta a:BOARD,y
-        jsr slotof              ; Y = mover's slot
+        tay                     ; piece byte -> mover's slot
+        lda SLOTTAB,y
+        tay
         lda UNDOFROM,x
         sta PIECESQ,y
         ; castle: move the rook back
@@ -573,12 +562,12 @@ umnocastle:
         ; restore any captured piece
         lda UNDOCAP,x
         beq umnocap
-        pha
         ldy UNDOCAPSQ,x
         sta a:BOARD,y
-        jsr slotof
+        tay                     ; victim byte -> its slot
+        lda SLOTTAB,y
+        tay
         lda UNDOCAPSQ,x
         sta PIECESQ,y
-        pla
 umnocap:
         rts

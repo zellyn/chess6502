@@ -71,7 +71,7 @@ GFROM     = $1C         ; movegen: current from-square
 GPIECE    = $1D         ; movegen: current piece byte
 GDIR      = $1E         ; movegen: current direction index
 GDELTA    = $1F         ; movegen: current step delta
-CAPSLOT   = $20         ; make: captured piece's slot
+; $20 free (was CAPSLOT, retired with slotof -> SLOTTAB)
 PROMTYPE  = $21         ; movegen: promotion loop scratch
 GTO       = $22         ; movegen scratch target square
 ATBITS    = $23         ; attacked(): attack-table bits for current diff
@@ -81,6 +81,7 @@ ATDELTA   = $27         ; attacked(): slider step delta
 GCOUNT    = $28         ; movegen: offset-loop counter
 CRTMP     = $29         ; castle helpers: rook piece byte
 ATT77     = $2A         ; attacked(): ATSQ + $77, precomputed at entry
+VICTIM    = $2B         ; make: captured piece byte
 
 BOARD     = $40         ; 128-byte 0x88 board, $40..$BF
 

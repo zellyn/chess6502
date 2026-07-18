@@ -522,7 +522,7 @@ evinext:
 ; ---------------------------------------------------------------
 ; eval: SCORE = tapered eval from the side to move's point of view,
 ; including tempo. score_w = EG + ((MG-EG) * w) >> 5, w = PHASEW[phase].
-; Clobbers A,X,Y, T0-T2, MUL0-2, EVTMP, PSQSQ.
+; Clobbers A,X,Y, T0-T1, MUL0-1, EVTMP, PSQSQ.
 ; ---------------------------------------------------------------
 eval:
         lda PHASE
@@ -569,38 +569,28 @@ eval:
         sbc T1
         sta T1
 evpos:  stx PSQSQ               ; sign flag (scratch reuse)
-        ; MUL0-2 = T0T1 * w  (shift-add, 6 bits)
+        ; MUL1:MUL0 = (T1:T0 * w) >> 5 via right-shift multiply.
+        ; w is 1..31 here (w=32/w=0 fast-pathed above), so 5 iterations
+        ; produce the >>5 for free: the shifted-out bits are exactly
+        ; the product's low 5 bits. T1:T0 is a magnitude < $8000, so
+        ; the accumulator never exceeds 17 bits (carry + 16).
         lda #0
         sta MUL0
         sta MUL1
-        sta MUL2
-        sta T2                  ; third byte of shifting multiplicand
-        ldx #6
+        ldx #5
 evmul:  lsr EVTMP
-        bcc evnoadd
-        clc
+        bcc evskip              ; bit clear: carry clear into the ror
+        clc                     ; carry is set here (from the lsr)
         lda MUL0
         adc T0
         sta MUL0
         lda MUL1
         adc T1
-        sta MUL1
-        lda MUL2
-        adc T2
-        sta MUL2
-evnoadd:
-        asl T0
-        rol T1
-        rol T2
-        dex
-        bne evmul
-        ; >> 5
-        ldx #5
-evshr:  lsr MUL2
-        ror MUL1
+        sta MUL1                ; adc carry-out falls into the ror
+evskip: ror MUL1
         ror MUL0
         dex
-        bne evshr
+        bne evmul
         ; reapply sign
         lda PSQSQ
         beq evnosgn

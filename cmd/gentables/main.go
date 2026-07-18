@@ -94,6 +94,19 @@ func main() {
 	emit(&b, "ATTACKTAB", attack[:])
 	b.WriteString("\n.align 256\n")
 	emit(&b, "DELTATAB", delta[:])
+
+	// SLOTTAB[b] = piece-list slot for piece byte b: index | (color ? 16 : 0).
+	// Page-aligned so lda SLOTTAB,y never crosses.
+	var slotTab [256]byte
+	for i := range slotTab {
+		s := i >> 4
+		if i&8 != 0 {
+			s |= 16
+		}
+		slotTab[i] = byte(s)
+	}
+	b.WriteString("\n.align 256\n")
+	emit(&b, "SLOTTAB", slotTab[:])
 	b.WriteString("\n.align 128\n")
 	emit(&b, "CASTLEMASK", castleMask[:])
 	b.WriteString("\n")
