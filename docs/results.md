@@ -3,6 +3,33 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — long battery: gates at 100 games, features-vs-budget verdict, first TSCP wins
+
+Full battery in tmux (runs/battery1.log), post give-check-propagation
+build; full test suite green first.
+
+- Depth-6 fixed-tree cycles: 0x00 = 7,604M, null-only = 6,708M,
+  null+killers+futility (0x07) = 4,404M. The 0x00 baseline itself
+  dropped from 8,243M — give-check propagation pays even with pruning
+  off.
+- Feature gates, 100 games each at 30 emulated s/move: null −3 ± 53,
+  killers +17 ± 53, futility +10 ± 53, pstruct −35 ± 61. All still
+  inside noise; accumulation continues (task #17).
+- **All-features (0x0F) vs baseline, 200 games: −7 ± 39.** The
+  features cut the depth-6 tree ~42% but buy no Elo at this budget —
+  and the arithmetic says why: 30 emulated s ≈ 31M cycles, while even
+  the 0x07 depth-5 tree costs hundreds of millions. Both configs
+  realize depth 4; the saved cycles can't cross the next depth
+  threshold, so they're wasted. The pruning features are levers that
+  only cash out once constant-factor cuts (deep optimization review,
+  ~750-850 cycles/node identified) + PVS/LMR bring depth 5 in range.
+  pstruct's −35 drag is separately fixable: weights are untuned
+  (Texel tuning in progress on the Go mirror, task #20).
+- TSCP-d3 rematch, 30 games, dither on: **2-27-1 (8.3%)** — the first
+  outright WINS against TSCP-d3 (previous best 0-18-2 = 5%). Still
+  decisively outgunned at realized depth 4 vs its depth 3 + better
+  eval + faster wall clock.
+
 ## 2026-07-18 — perf batch 1 (lazy legality, attacked() micro, hashstm unroll)
 
 Depth-6 fixed-tree cycles: baseline 8,575M -> 8,243M; all features
