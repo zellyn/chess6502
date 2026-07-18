@@ -15,8 +15,7 @@ func mustMake(t *testing.T, p *Position, s string) {
 }
 
 func TestZobristTransposition(t *testing.T) {
-	const startFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-	start, err := ParseFEN(startFEN)
+	start, err := ParseFEN(StartFEN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +23,7 @@ func TestZobristTransposition(t *testing.T) {
 	// Knights out and back: same position as the start, reached via a
 	// four-move round trip. Knight moves never touch castling rights or
 	// leave an en passant square, so the key should exactly match.
-	p1, _ := ParseFEN(startFEN)
+	p1, _ := ParseFEN(StartFEN)
 	for _, mv := range []string{"g1f3", "g8f6", "f3g1", "f6g8"} {
 		mustMake(t, p1, mv)
 	}
@@ -34,8 +33,8 @@ func TestZobristTransposition(t *testing.T) {
 	}
 
 	// Same resulting position via two different move orders.
-	p2, _ := ParseFEN(startFEN)
-	p3, _ := ParseFEN(startFEN)
+	p2, _ := ParseFEN(StartFEN)
+	p3, _ := ParseFEN(StartFEN)
 	for _, mv := range []string{"b1c3", "b8c6", "g1f3", "g8f6"} {
 		mustMake(t, p2, mv)
 	}

@@ -32,8 +32,6 @@ import (
 	"github.com/zellyn/chess6502/harness"
 )
 
-const effectiveHz = 1020484 // IIe average clock: 65 cycles per 63.7µs line
-
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(2)
@@ -107,7 +105,7 @@ func main() {
 	}
 	wall := time.Since(start)
 
-	emulated := time.Duration(float64(m.Cycles) / effectiveHz * float64(time.Second))
+	emulated := time.Duration(float64(m.Cycles) / harness.EffectiveHz * float64(time.Second))
 	speedup := "-"
 	if wall > 0 {
 		speedup = fmt.Sprintf("%.0fx", float64(emulated)/float64(wall))

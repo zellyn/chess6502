@@ -16,7 +16,7 @@ var perftCases = []struct {
 }{
 	{
 		"startpos",
-		"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+		StartFEN,
 		[]uint64{20, 400, 8902, 197281, 4865609},
 	},
 	{

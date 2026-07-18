@@ -55,7 +55,7 @@ func main() {
 		Defs:         defs,
 		FeaturesA:    byte(a),
 		FeaturesB:    byte(b),
-		BudgetCycles: *budgetMs * 1020,
+		BudgetCycles: *budgetMs * chesstest.CyclesPerMs,
 		Pairs:        *pairs,
 		Parallel:     *parallel,
 	})

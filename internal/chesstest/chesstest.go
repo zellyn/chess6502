@@ -1,7 +1,10 @@
-// Package chesstest runs the assembly engine inside the harness for
-// testing: it parses asm/defs.inc for the memory-layout contract, encodes
-// FEN positions into the engine's in-memory representation, and drives
-// perft runs.
+// Package chesstest is the engine-embedding layer: it parses asm/defs.inc
+// for the memory-layout contract, encodes FEN positions into the engine's
+// in-memory representation, and drives the harness machine through perft
+// runs and searches. Despite the name, it is not test-only — it is the
+// shared foundation both the *_test.go files in this repo and the
+// production internal packages (ucibridge, behind cmd/uci; sprt, behind
+// cmd/sprt) build on to load the engine binary and talk to it.
 package chesstest
 
 import (
@@ -14,6 +17,12 @@ import (
 
 	"github.com/zellyn/chess6502/harness"
 )
+
+// CyclesPerMs is the engine's effective clock rate in cycles per emulated
+// millisecond: harness.EffectiveHz (1.0205 MHz, rounded down to 1020484)
+// divided by 1000. Used to convert wall/UCI time budgets into engine
+// cycle budgets.
+const CyclesPerMs = 1020
 
 // Defs holds symbol values parsed from asm/defs.inc ("NAME = $HEX" lines).
 type Defs map[string]uint16
@@ -272,4 +281,19 @@ func Perft(bin []byte, defs Defs, pos *Position, depth byte, maxCycles uint64) (
 		return count, m.Cycles, fmt.Errorf("COUT printed %q, memory says %s", printed, want)
 	}
 	return count, m.Cycles, nil
+}
+
+// SqName renders a 0x88 square as algebraic notation, e.g. "e4".
+func SqName(sq byte) string {
+	return fmt.Sprintf("%c%c", 'a'+sq&0x0F, '1'+sq>>4)
+}
+
+// MoveUCI renders a 0x88 from/to pair plus engine move flags (bits 0-2 =
+// FL_PROMO in asm/defs.inc) as a UCI move string, e.g. "e2e4" or "e7e8q".
+func MoveUCI(from, to, flags byte) string {
+	move := SqName(from) + SqName(to)
+	if p := flags & 0x07; p != 0 {
+		move += string("..nbrq"[p])
+	}
+	return move
 }

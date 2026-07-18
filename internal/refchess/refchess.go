@@ -17,6 +17,9 @@ import (
 	"strings"
 )
 
+// StartFEN is the standard chess starting position.
+const StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
 // Piece types. 0 is reserved to mean "empty square".
 const (
 	pawn = 1 + iota

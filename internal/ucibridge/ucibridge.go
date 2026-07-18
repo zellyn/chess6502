@@ -23,9 +23,10 @@ import (
 )
 
 const (
-	cyclesPerMs = 1020 // 1.0205 MHz, rounded down
+	// cyclesPerMs mirrors chesstest.CyclesPerMs (the engine's effective
+	// clock, 1.0205 MHz, rounded down to 1020 cycles/ms).
+	cyclesPerMs = chesstest.CyclesPerMs
 	maxDepthCap = 24
-	startFEN    = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 )
 
 type Bridge struct {
@@ -50,7 +51,7 @@ func (b *Bridge) Run(r io.Reader, w io.Writer) error {
 		out.Flush()
 	}
 
-	b.pos, _ = refchess.ParseFEN(startFEN)
+	b.pos, _ = refchess.ParseFEN(refchess.StartFEN)
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
@@ -67,7 +68,7 @@ func (b *Bridge) Run(r io.Reader, w io.Writer) error {
 			say("readyok")
 		case "ucinewgame":
 			b.aux = nil // clear the TT
-			b.pos, _ = refchess.ParseFEN(startFEN)
+			b.pos, _ = refchess.ParseFEN(refchess.StartFEN)
 		case "setoption":
 			// setoption name X value Y
 			if len(fields) >= 5 && strings.EqualFold(fields[2], "EmulatedMovetimeMs") {
@@ -99,7 +100,7 @@ func (b *Bridge) setPosition(args []string) error {
 	i := 0
 	switch {
 	case len(args) > 0 && args[0] == "startpos":
-		b.pos, err = refchess.ParseFEN(startFEN)
+		b.pos, err = refchess.ParseFEN(refchess.StartFEN)
 		i = 1
 	case len(args) > 0 && args[0] == "fen":
 		// FEN is the next up-to-6 fields, until "moves".
@@ -206,10 +207,7 @@ func (b *Bridge) think(args []string) (string, error) {
 	from := m.Mem.Main[b.Defs["BESTFROM"]]
 	to := m.Mem.Main[b.Defs["BESTTO"]]
 	flags := m.Mem.Main[b.Defs["BESTFLAGS"]]
-	move := sq88(from) + sq88(to)
-	if p := flags & 0x07; p != 0 {
-		move += string("..nbrq"[p])
-	}
+	move := chesstest.MoveUCI(from, to, flags)
 	mv, err := refchess.ParseMove(move)
 	if err != nil {
 		return "", fmt.Errorf("engine move %q: %w", move, err)
@@ -229,8 +227,4 @@ func goDepth(args []string) (byte, bool) {
 		}
 	}
 	return 0, false
-}
-
-func sq88(sq byte) string {
-	return fmt.Sprintf("%c%c", 'a'+sq&0x0F, '1'+sq>>4)
 }

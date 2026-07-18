@@ -1,10 +1,12 @@
 package chesstest
 
 import (
+	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/zellyn/chess6502/internal/asmbuild"
 )
 
 var (
@@ -17,26 +19,14 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	asm := filepath.Join(root, "asm")
-	if _, err := exec.LookPath("ca65"); err != nil {
-		os.Stderr.WriteString("SKIP: ca65 not installed\n")
-		os.Exit(0)
-	}
-	run := func(dir, name string, args ...string) {
-		cmd := exec.Command(name, args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			os.Stderr.WriteString(string(out))
-			panic(err)
+	if err := asmbuild.Build(root); err != nil {
+		if errors.Is(err, asmbuild.ErrCA65NotInstalled) {
+			os.Stderr.WriteString("SKIP: ca65 not installed\n")
+			os.Exit(0)
 		}
+		panic(err)
 	}
-	run(root, "go", "run", "./cmd/gentables")
-	run(asm, "ca65", "perft.s", "-o", "perft.o")
-	run(asm, "ld65", "-C", "perft.cfg", "perft.o", "-o", "perft.bin", "-Ln", "perft.lbl")
-	run(asm, "ca65", "banktest.s", "-o", "banktest.o")
-	run(asm, "ld65", "-C", "banktest.cfg", "banktest.o", "-o", "banktest.bin")
-	run(asm, "ca65", "-g", "engine.s", "-o", "engine.o")
-	run(asm, "ld65", "-C", "engine.cfg", "engine.o", "-o", "engine.bin", "-Ln", "engine.lbl")
+	asm := filepath.Join(root, "asm")
 	perftBin, err = os.ReadFile(filepath.Join(asm, "perft.bin"))
 	if err != nil {
 		panic(err)

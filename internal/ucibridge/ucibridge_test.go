@@ -6,15 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zellyn/chess6502/internal/asmbuild"
 	"github.com/zellyn/chess6502/internal/chesstest"
 )
 
 // TestBridgeSession drives a short UCI session: handshake, a position
 // with moves, two searches (exercising the TT carryover), and a mate.
 func TestBridgeSession(t *testing.T) {
+	asmbuild.BuildT(t, "../..")
 	bin, err := os.ReadFile(filepath.Join("..", "..", "asm", "engine.bin"))
 	if err != nil {
-		t.Skipf("engine.bin not built: %v", err)
+		t.Fatal(err)
 	}
 	defs, err := chesstest.ParseDefs(filepath.Join("..", "..", "asm", "defs.inc"))
 	if err != nil {

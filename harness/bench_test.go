@@ -6,12 +6,6 @@ import (
 	"time"
 )
 
-// effectiveHz is the IIe's effective clock rate (65 cycles per 63.7µs
-// line), matching the constant of the same name in cmd/a2run. It's used
-// here only to turn the benchmark's raw emulated-MHz figure into a
-// speedup-vs-real-hardware ratio.
-const effectiveHz = 1020484
-
 // loopBin is a tiny hand-assembled busy loop — no ca65 dependency in
 // tests. It increments a zero-page counter forever:
 //
@@ -81,7 +75,7 @@ func BenchmarkRun(b *testing.B) {
 
 	mhz := float64(totalCycles) / wall.Seconds() / 1e6
 	b.ReportMetric(mhz, "emulated-MHz")
-	b.ReportMetric(mhz*1e6/effectiveHz, "x-realtime")
+	b.ReportMetric(mhz*1e6/EffectiveHz, "x-realtime")
 }
 
 // TestCout runs coutBin and checks that the byte it stores to the COUT

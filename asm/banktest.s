@@ -67,6 +67,7 @@ msg:    lda text,x
         bne msg
 done:   lda #0
         sta EXIT_TRAP
+        brk                     ; unreachable in the harness
 fail:   lda #1
         sta EXIT_TRAP
         brk

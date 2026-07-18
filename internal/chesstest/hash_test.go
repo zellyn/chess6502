@@ -70,7 +70,7 @@ func TestHashConsistency(t *testing.T) {
 			}
 		}
 		zplane0 := labels["ZPLANE0"]
-		for slot, sq := range pos.PieceSq {
+		for _, sq := range pos.PieceSq {
 			if sq == 0xFF {
 				continue
 			}
@@ -80,7 +80,6 @@ func TestHashConsistency(t *testing.T) {
 			for p := range want {
 				want[p] ^= m.Mem.Main[zplane0+uint16(p)*1536+uint16(kind)*128+uint16(sq)]
 			}
-			_ = slot
 		}
 		if pos.Side != 0 {
 			xor4(labels["STMKEY"])

@@ -124,7 +124,7 @@ func GenOpenings(bin []byte, defs chesstest.Defs, n int) [][]string {
 	seen := map[string]bool{}
 	for len(out) < n {
 		base := Openings[rnd.IntN(len(Openings))]
-		ref, err := refchess.ParseFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+		ref, err := refchess.ParseFEN(refchess.StartFEN)
 		if err != nil {
 			panic(err)
 		}
@@ -288,10 +288,7 @@ func playGame(cfg Config, opening []string, aWhite bool) (int, error) {
 		from := m.Mem.Main[cfg.Defs["BESTFROM"]]
 		to := m.Mem.Main[cfg.Defs["BESTTO"]]
 		flags := m.Mem.Main[cfg.Defs["BESTFLAGS"]]
-		ms := fmt.Sprintf("%c%c%c%c", 'a'+from&0x0F, '1'+from>>4, 'a'+to&0x0F, '1'+to>>4)
-		if p := flags & 0x07; p != 0 {
-			ms += string("..nbrq"[p])
-		}
+		ms := chesstest.MoveUCI(from, to, flags)
 		mv, err := refchess.ParseMove(ms)
 		if err != nil {
 			return 0, err

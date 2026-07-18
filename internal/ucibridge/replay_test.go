@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/zellyn/chess6502/internal/asmbuild"
 	"github.com/zellyn/chess6502/internal/chesstest"
 	"github.com/zellyn/chess6502/internal/refchess"
 )
@@ -14,9 +15,10 @@ import (
 // each engine turn, also searches the same position cold. Divergence
 // implicates the carryover.
 func TestReplayMatchPrefix(t *testing.T) {
+	asmbuild.BuildT(t, "../..")
 	bin, err := os.ReadFile(filepath.Join("..", "..", "asm", "engine.bin"))
 	if err != nil {
-		t.Skipf("engine.bin not built: %v", err)
+		t.Fatal(err)
 	}
 	defs, err := chesstest.ParseDefs(filepath.Join("..", "..", "asm", "defs.inc"))
 	if err != nil {
@@ -28,7 +30,7 @@ func TestReplayMatchPrefix(t *testing.T) {
 	b := &Bridge{Bin: bin, Defs: defs, FixedBudgetMs: 30000}
 	// Drive move by move via bridge internals so cold searches can be
 	// interleaved.
-	b.pos, _ = refchess.ParseFEN(startFEN)
+	b.pos, _ = refchess.ParseFEN(refchess.StartFEN)
 	for i := 0; i <= len(replies); i++ {
 		fenBefore := b.pos.FEN()
 		mv, err := b.think(nil)
@@ -44,11 +46,19 @@ func TestReplayMatchPrefix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// docs/results.md 2026-07-18 (M3) first ran this replay to confirm
+		// bridge-vs-cold-engine parity (no TT-carryover corruption) for a
+		// real losing game; assert it so a future regression fails the
+		// build instead of only appearing in -v log output.
 		mark := ""
 		if cold.Move != mv {
 			mark = "  <-- DIVERGES"
 		}
 		t.Logf("move %2d: bridge=%s cold=%s (cold score %d)%s", i+1, mv, cold.Move, cold.Score, mark)
+		if cold.Move != mv {
+			t.Errorf("move %2d: bridge move %s diverges from cold search %s (cold score %d, fen %q)",
+				i+1, mv, cold.Move, cold.Score, fenBefore)
+		}
 		if i < len(replies) {
 			rmv, err := refchess.ParseMove(replies[i])
 			if err != nil {

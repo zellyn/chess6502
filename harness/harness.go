@@ -31,6 +31,10 @@ import (
 // Card ROM image.
 const ROMSize = 0x3000
 
+// EffectiveHz is the IIe's effective clock rate: 65 cycles per 63.7µs
+// line, averaged over long-cycle and short-cycle lines.
+const EffectiveHz = 1020484
+
 // Config configures a Machine. Bin is required; the rest have meaningful
 // zero values (Org 0, Entry 0, trap addresses 0, no ROM, Cout discarded,
 // tracing off), though callers will usually want to set Org, Entry, and

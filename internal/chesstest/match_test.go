@@ -14,7 +14,7 @@ import (
 // from the engine's perspective: +1 win, 0 draw, -1 loss.
 func playGame(t *testing.T, depth byte, engineWhite bool, seed int64) int {
 	t.Helper()
-	ref, err := refchess.ParseFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+	ref, err := refchess.ParseFEN(refchess.StartFEN)
 	if err != nil {
 		t.Fatal(err)
 	}

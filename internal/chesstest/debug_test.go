@@ -1,15 +1,16 @@
 package chesstest
 
 import (
-	"fmt"
+	"os"
 	"testing"
 )
 
 // TestDebugRootMoves prints the move list generated at the root — a
-// debugging aid for perft mismatches.
+// debugging aid for perft mismatches. Gated behind CHESS6502_DEBUG so it
+// stays silent in ordinary test runs.
 func TestDebugRootMoves(t *testing.T) {
-	if testing.Short() {
-		t.Skip("debug helper")
+	if os.Getenv("CHESS6502_DEBUG") != "1" {
+		t.Skip("set CHESS6502_DEBUG=1 to run")
 	}
 	fen := "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
 	pos, err := ParseFEN(fen)
@@ -28,20 +29,16 @@ func TestDebugRootMoves(t *testing.T) {
 	t.Logf("generated %d moves:", (end-base)/3)
 	for a := base; a < end; a += 3 {
 		from, to, flags := m.Mem.Main[a], m.Mem.Main[a+1], m.Mem.Main[a+2]
-		t.Logf("  %s%s flags=%02x", sqName(from), sqName(to), flags)
+		t.Logf("  %s%s flags=%02x", SqName(from), SqName(to), flags)
 	}
 	// Also dump the piece list.
 	psq := defs["PIECESQ"]
 	for slot := range 32 {
 		sq := m.Mem.Main[psq+uint16(slot)]
 		if sq != 0xFF {
-			t.Logf("slot %2d: %s (board=%02x)", slot, sqName(sq), m.Mem.Main[defs["BOARD"]+uint16(sq)])
+			t.Logf("slot %2d: %s (board=%02x)", slot, SqName(sq), m.Mem.Main[defs["BOARD"]+uint16(sq)])
 		}
 	}
-}
-
-func sqName(sq byte) string {
-	return fmt.Sprintf("%c%c", 'a'+sq&0x0F, '1'+sq>>4)
 }
 
 // TestDebugKingSlot single-steps the engine and logs every write to the
@@ -68,7 +65,7 @@ func TestDebugKingSlot(t *testing.T) {
 			t.Fatal(err)
 		}
 		if cur := m.Mem.Main[psq]; cur != prev {
-			t.Logf("cycle %7d PC=%04X: king slot %s -> %s", m.Cycles, m.CPU.PC(), sqName(prev), sqName(cur))
+			t.Logf("cycle %7d PC=%04X: king slot %s -> %s", m.Cycles, m.CPU.PC(), SqName(prev), SqName(cur))
 			prev = cur
 			n++
 			if n > 40 {
