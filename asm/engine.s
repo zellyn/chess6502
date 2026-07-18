@@ -131,6 +131,10 @@ iterate:
         sta MAXDEPTH
         lda #0
         sta PLY
+        jsr curincheck          ; root in-check state (make propagates
+        lda #0                  ; it for every deeper ply)
+        rol
+        sta INCHK
         lda #<MOVESTACK
         sta MSP
         lda #>MOVESTACK

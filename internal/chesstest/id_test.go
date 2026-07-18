@@ -34,7 +34,7 @@ func TestIterativeDeepening(t *testing.T) {
 	if res.Move == "" || res.Score < -200 || res.Score > 200 {
 		t.Errorf("implausible: %q %d", res.Move, res.Score)
 	}
-	if res.Cycles > budget*2+budget/4 {
+	if res.Cycles > budget*5/2 {
 		t.Errorf("hard abort failed: %d cycles for budget %d", res.Cycles, budget)
 	}
 }

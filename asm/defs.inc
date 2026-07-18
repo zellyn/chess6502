@@ -145,6 +145,8 @@ FT_NULL   = $01         ; null-move pruning (R=2)
 FT_KILLER = $02         ; killer-move ordering
 FT_FUTIL  = $04         ; futility + reverse-futility at depth <= 2
 FT_PSTRUCT = $08        ; pawn-structure + king-shield eval term
+FT_CKVERIFY = $80       ; debug: verify make's gives-check against a
+                        ; full scan at every node (exit 101 on mismatch)
 
 ; TT bound codes (in entry byte 7, low 2 bits; 0 = empty entry)
 TT_UPPER = 1

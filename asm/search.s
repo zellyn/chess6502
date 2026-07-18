@@ -72,6 +72,7 @@ ccout:  rts
 ; ---------------------------------------------------------------
 search:
         inc NODECNT
+        inc NODECNT             ; +2: poll the clock every 128 nodes
         bne :+
         jsr checkclock
 :       lda ABORT
@@ -151,12 +152,27 @@ sdraw:  lda #0
         sta SCORE+1
         rts
 sdrawend:
+.ifndef NOEVAL
+        ; debug (FT_CKVERIFY): cross-check the propagated in-check flag
+        ; against a full scan; a mismatch kills the run with code 101
+        lda FEATURES
+        and #FT_CKVERIFY
+        beq ckvdone
+        jsr curincheck
         ldy PLY
         lda #0
-        sta LEGALCNT,y
+        rol
+        cmp INCHK,y
+        beq ckvdone
+        lda #101
+        sta EXIT_TRAP
+ckvdone:
+.endif
+        ldy PLY
+        lda #0                  ; (INCHK,y is NOT cleared here: it was
+        sta LEGALCNT,y          ;  propagated by make / the root driver)
         sta QSKIND,y
         sta RAISED,y
-        sta INCHK,y
         sta FUTILE,y
         sta DELTATL,y
         lda #$80                ; delta threshold -32768: no delta pruning
@@ -231,12 +247,10 @@ ttexact:
         rts
 
 squiesce:
-        jsr curincheck
-        bcc :+
-        ldy PLY                 ; in check: full evasion node
-        lda #1
-        sta INCHK,y
-        jmp snode
+        ldy PLY
+        lda INCHK,y             ; propagated by make
+        beq :+
+        jmp snode               ; in check: full evasion node
 :
         ldy PLY
         lda #1
@@ -299,11 +313,7 @@ qsnodelta:
 ; sprep: full-width-node pruning, before move generation.
 ; ---------------------------------------------------------------
 sprep:  ldy PLY
-        jsr curincheck
-        ldy PLY
-        lda #0
-        rol                     ; carry (in check) -> A
-        sta INCHK,y
+        lda INCHK,y             ; propagated by make (root: the driver)
         beq :+
         jmp snode               ; in check: no null, no RFP, no futility
 :       ; ---- null move: FT_NULL, not at the root, not right after a
@@ -513,6 +523,9 @@ makenull:
         sta SIDE
         inc HALFMOVE
         inc PLY
+        ldx PLY                 ; passing the move never gives check
+        lda #0                  ; (null is only tried when not in check,
+        sta INCHK,x             ;  so the opponent can't be in check)
         rts
 unmakenull:
         dec PLY

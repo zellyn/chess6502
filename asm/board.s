@@ -293,6 +293,122 @@ mknoech:
         sta SIDE
         inc PLY
 .ifndef NOEVAL
+        ; gives-check propagation (perf review F2): INCHK for the child
+        ; ply is computed here from the difference tables instead of a
+        ; full attacked() scan at the child's entry. Castles and ep
+        ; captures (two vacated squares / rook lines) take the full scan.
+        lda MVFLAGS
+        and #FL_CASTLE|FL_EP
+        beq ckfast
+        jsr curincheck          ; side to move (the opponent) in check?
+        ldx PLY
+        lda #0
+        rol
+        sta INCHK,x
+        jmp ckdone
+ckfast: ; direct check: does the piece now on TO attack the enemy king?
+        lda SIDE
+        asl
+        tay
+        lda PIECESQ,y           ; enemy king (side to move after the flip)
+        sta ATSQ
+        sec
+        sbc TO
+        clc
+        adc #$77
+        tay
+        lda ATTACKTAB,y
+        beq cknodir
+        sta ATBITS
+        sty DIFF
+        ldx TO
+        lda BOARD,x
+        and #TYPEMASK
+        tax
+        cpx #PAWN
+        bne cknp
+        lda SIDE                ; mover color = SIDE ^ COLORMASK
+        eor #COLORMASK
+        bne ckbp
+        lda ATBITS              ; white pawn just moved
+        and #ATK_WPAWN
+        bne ckhit
+        beq cknodir             ; always
+ckbp:   lda ATBITS
+        and #ATK_BPAWN
+        bne ckhit
+        beq cknodir             ; always
+cknp:   lda TYPEATKTAB,x
+        and ATBITS
+        beq cknodir
+        cpx #KNIGHT
+        beq ckhit
+        cpx #KING
+        beq cknodir             ; a king never gives check
+        ldy DIFF                ; slider: walk TO -> K for blockers
+        lda DELTATAB,y
+        sta ATDELTA
+        lda TO
+ckwalk: clc
+        adc ATDELTA
+        cmp ATSQ
+        beq ckhit
+        tax
+        lda BOARD,x
+        bne cknodir             ; blocked
+        txa
+        jmp ckwalk
+cknodir:
+        ; discovered check: vacating FROM may open a ray from K through
+        ; FROM to one of the mover's sliders
+        lda ATSQ
+        sec
+        sbc FROM
+        clc
+        adc #$77
+        tay
+        lda ATTACKTAB,y
+        and #ATK_DIAG|ATK_ORTHO
+        beq cknone
+        sta ATBITS              ; the K-FROM ray's orientation
+        lda FROM
+        sec
+        sbc ATSQ
+        clc
+        adc #$77
+        tay
+        lda DELTATAB,y
+        beq cknone
+        sta ATDELTA
+        lda ATSQ
+ckdwalk: clc
+        adc ATDELTA
+        tax
+        and #$88
+        bne cknone              ; off the board: nothing behind FROM
+        lda BOARD,x
+        beq ckdnext              ; empty (including FROM itself)
+        eor SIDE                ; first piece: mover's color?
+        and #COLORMASK
+        beq cknone              ; checked side's own piece: blocked
+        lda BOARD,x
+        and #TYPEMASK
+        tay
+        lda TYPEATKTAB,y
+        and ATBITS              ; slider matching the ray orientation?
+        bne ckhit
+        beq cknone              ; always
+ckdnext: txa
+        jmp ckdwalk
+ckhit:
+        ldx PLY
+        lda #1
+        sta INCHK,x
+        bne ckdone              ; always
+cknone: ldx PLY
+        lda #0
+        sta INCHK,x
+ckdone:
         ; refresh the pawn/king structure term if a pawn or king moved
         lda PDIRTY
         beq :+
