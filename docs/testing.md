@@ -18,10 +18,11 @@ the cycle-accurate `go6502` CPU core, assert on results, repeat.
 
 ```sh
 make            # assemble hello, run it in the harness, run all Go tests
+make engine     # build the engine binary (asm/engine.bin)
 # or by hand:
-ca65 engine.s -o engine.o
-ld65 -C raw2000.cfg engine.o -o engine.bin
-go run ./cmd/a2run -bin engine.bin -org 0x2000 [-dump 0300:0320] [-trace]
+cd asm && ca65 -g engine.s -o engine.o
+cd asm && ld65 -C engine.cfg engine.o -o engine.bin -Ln engine.lbl
+go run ./cmd/a2run -bin asm/engine.bin -org 0x4000 [-dump 0300:0320] [-trace]
 ```
 
 `a2run` loads the raw binary into main RAM (validating org/entry ranges
@@ -48,16 +49,28 @@ memory map (D8) so engine tables can never collide with them.
 |---|---|---|
 | `$BFF0` | store (main bank) | emit byte to stdout |
 | `$BFFF` | store (main bank) | exit; stored value becomes the process exit code |
-| `$BFF1`/`$BFF2` | read | planned (D12, at M3): input byte / input-ready status |
+| `$BFF1` | read (main bank) | pop and return the next input byte (0 if none) |
+| `$BFF2` | read (main bank) | `$80` if input is waiting, else 0; reading with an empty buffer also sets `WaitingForInput`, so a driving process can supply input (`SendInput`) and resume the run |
+| `$BFF4`-`$BFF6` | read (main bank) | cycle count / 256, 24 bits little-endian, latched on the `$BFF4` read |
 | `$C019` | read | VBL status derived from the cycle counter (bit 7 low during VBL, IIe sense) — lets the hardware timing path be tested pre-metal |
 
 The `-cout`/`-exit` flags can relocate the traps for experiments, but
 $BFF0/$BFFF are canonical — all checked-in code assumes them.
 
-Planned additions as the engine needs them (mostly at M3, see D12):
-input traps + long-lived session mode for the UCI bridge, extraction of
-the a2run core into an importable Go package so perft/gauntlet rigs run
-in-process instead of scraping CLI output, PC-trap callbacks, and a
+Landed as the engine needed them (M3, D12): the harness package supports
+the input traps above — `(*Machine).Run` is resumable (each call gives
+it a fresh cycle budget on top of cycles already run) and returns early
+when the program polls `$BFF2` with no input pending (`WaitingForInput`),
+so a driving process can `SendInput` and call `Run` again without
+restarting the process — and the a2run core is now the importable
+`harness` package (`harness.New` / `(*Machine).Run`); `cmd/a2run` is a
+thin CLI wrapper around it, and perft/gauntlet rigs (`internal/chesstest`)
+call it in-process instead of scraping CLI output. The UCI bridge
+(`cmd/uci`, M3) ended up not needing the input traps: no 6502 code reads
+`$BFF1`/`$BFF2` today — `cmd/uci` instead keeps one long-lived *Go*
+process that pokes each position directly into a fresh `Machine` per
+move and carries the aux-bank TT bytes forward between them (see
+`internal/ucibridge`). Still planned: PC-trap callbacks, and a
 symbol-aware trace using the ca65 listing/map files. Perft results come
 out via COUT as ASCII (exit codes are 8-bit; counts are 32-bit).
 
@@ -102,17 +115,23 @@ hangs in a BRK loop, because monitor output vectors through CSW (`$36/$37`)
 and the BRK vector (`$3F0`) is uninitialized — the stub must run
 SETKBD/SETVID/INIT/HOME first, like a real boot.
 
-## Engine-specific test rigs (planned; see docs/plan.md milestones)
+## Engine-specific test rigs (`internal/chesstest`; see docs/plan.md milestones)
 
-- **Perft in the emulator**: run the engine's move generator to fixed
-  depths from standard positions (startpos, Kiwipete, etc.) inside a2run
-  and compare node counts against published values. This is the movegen
-  correctness gate before any search work.
-- **Search invariants**: fixed-depth, fixed-node searches of tactical
-  positions with expected best moves (subset of WAC), run in CI.
-- **UCI bridge** (`cmd/uci`): a Go process that speaks UCI to cutechess-cli
-  and relays moves to the emulated engine through the harness I/O traps
-  (D12 input design; long-lived session). Gauntlets follow the four-part
+- **Perft in the emulator**: `TestPerft` (`perft_test.go`) runs the engine's
+  move generator to fixed depths from standard positions (startpos,
+  Kiwipete, etc.) inside the harness and compares node counts against
+  published values — the movegen correctness gate, passing since M1.
+- **Search invariants**: `TestWACBaseline`/`TestWACDeepening` run a WAC
+  subset with expected best moves at fixed depth and under iterative
+  deepening; `TestLegalityTorture` (`match_test.go`) validates every move
+  the engine emits in self-play against an independent Go chess library.
+  All run via `go test` — there is no CI yet (see Known infrastructure
+  gaps below).
+- **UCI bridge** (`cmd/uci`, `internal/ucibridge`): a long-lived Go
+  process that speaks UCI to cutechess-cli, tracks position on the Go
+  side, and pokes each move's position directly into a fresh `Machine`
+  (carrying the aux-bank TT forward between moves) rather than using the
+  D12 input traps (see D12's amendment). Gauntlets follow the four-part
   protocol in plan.md/D11: paired openings always; opponents bracketing
   our level at their rating-valid conditions; node-odds ladder for the
   headline. cutechess must be run with generous wall margins
@@ -141,9 +160,5 @@ SETKBD/SETVID/INIT/HOME first, like a real boot.
 - **No CI anywhere** (chess6502, goapple2, go6502, a2audit) — the
   hardware-truth gates currently run only on one machine. GitHub Actions
   for `make test` is the obvious first step once repos are pushed.
-- The load-bearing changes in sibling repos (goapple2's `iie/` package
-  and go.mod, go6502's go.mod and test fixes) and this repo itself need
-  commits/pushes before the documented workflow is reproducible anywhere
-  else.
 - a2audit assembly writes `audit.o` into the a2audit checkout (gitignored
   there, but still a cross-repo side effect of `go test`).

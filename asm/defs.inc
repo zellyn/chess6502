@@ -1,6 +1,9 @@
 ; chess6502 core definitions: memory layout and encodings.
-; The Go test rig reads these addresses from the ld65 label file (-Ln);
-; keep symbols exported (no @local) for anything Go needs to poke or read.
+; internal/chesstest parses this file directly for its symbol table
+; (ParseDefs); the ld65 label file (-Ln) is consulted only for symbols
+; not defined here, e.g. gentables-emitted table symbols like ZPLANE0/
+; STMKEY/CASTKEYS/EPKEYS/KINDTAB (see hash_test.go). Keep symbols
+; exported (no @local) for anything Go needs to poke or read.
 
 ; ---- Piece encoding (board byte) ----
 ; index<<4 | color<<3 | type    (0 = empty square)

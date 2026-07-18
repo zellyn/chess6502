@@ -8,6 +8,7 @@ built to demonstrate how far chess engine theory has advanced since the
 - **The plan**: [docs/plan.md](docs/plan.md)
 - **Decisions**: [docs/decisions.md](docs/decisions.md)
 - **Dev loop & testing**: [docs/testing.md](docs/testing.md)
+- **Match & measurement log**: [docs/results.md](docs/results.md)
 - **Research notes** (with citations): [docs/research/](docs/research/)
 
 ## Quick start

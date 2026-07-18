@@ -98,7 +98,7 @@ whole cost:
   index stability; grows the undo frame).
 - Promotion bookkeeping (piece type changes mid-list).
 
-## D6: 32-bit Zobrist hashing; transposition table in aux RAM — proposed
+## D6: 32-bit Zobrist hashing; transposition table in aux RAM — accepted, implemented (M3, 2026-07-18)
 
 32-bit keys, incrementally XOR-updated in make/unmake (~160 cycles for
 the two square-keys plus side-to-move; see the cycle budgets in plan.md).
@@ -114,10 +114,21 @@ opening book and optional KPK data. Entry: 20 verify bits (all the
 non-index bits — they're free), packed move, 16-bit score, depth, bound
 flags. Collision math: ~0.3-0.6 false verify-matches per game at our
 node rates — harmless for scores (Hyatt & Cozzie), **fatal for an
-unvalidated move on a 6502** (piece-list/accumulator desync). Therefore:
-**the TT move (and killer moves — also from sibling nodes) are pseudo-
-legality-checked before use**: right piece on from-square, target not own
-piece, slider path clear (~60-100 cycles, TT-move nodes only).
+unvalidated move on a 6502** (piece-list/accumulator desync). As built,
+this is handled by **list-match validation, not a standalone pseudo-
+legality checker**: the TT move (and killer moves — also from sibling
+nodes) are only searched if they match a from/to pair actually present
+in this node's freshly generated move list. The move loop already runs
+that list as ordered passes — pass 0 fetches the TT move and searches it
+only on a match, later passes explicitly skip it, and killer passes work
+the same way (search.s's `sfetch`/`squietk`/`squietr`; pass order: TT
+move, heavy captures, light captures, killers, quiets). A hash collision
+that names a from/to pair absent from the real list simply matches
+nothing and is never applied — free correctness from a scan the loop
+runs anyway, superseding the originally planned standalone checker
+(right piece on from-square, target not own piece, slider path clear),
+which would have cost ~60-100 extra cycles per TT-move node for no
+extra safety.
 
 Aux probe cost ~180-230 cycles round trip (RAMRD toggles + 8-byte ZP
 copy from LC-resident primitive); store ~120 (RAMWRT-only, callable from
@@ -133,6 +144,13 @@ truncated hashes in main RAM, not the TT; a truncated-hash match is
 verified against the full 32-bit key before scoring a draw. See plan.md
 for repetition-vs-TT ordering rules.
 
+Amendment (M4, 2026-07-18): a null-move cutoff has no associated move, so
+it stores a moveless `TT_LOWER` entry (from = to = `NOSQ`, score = beta)
+instead of skipping the store. On a later visit, pass 0's list-match
+against `NOSQ` simply fails, so the node falls through with no TT move —
+the cutoff is captured purely via the score/bound fields, consistent
+with the list-match design above.
+
 ## D7: Reserve hires page 1 ($2000-$3FFF) for a future board display — accepted
 
 The engine and its tables stay out of `$2000-$3FFF` so a simple hires board
@@ -142,10 +160,14 @@ end up desperate for main RAM, this is the first decision to revisit.
 
 ## D8: Harness I/O via store-traps at $BFF0 (COUT) / $BFFF (exit); engine I/O behind a vector table — accepted (amended)
 
-Store-traps are invisible on real hardware (plain RAM writes). The engine
-calls I/O only through a small vectored module (put-char, get-line,
-move-out), so the same engine core links against a harness I/O module today
-and a keyboard/screen (or Super Serial) module later.
+Store-traps are invisible on real hardware (plain RAM writes). The design
+calls for the engine to reach I/O only through a small vectored module
+(put-char, get-line, move-out), so the same engine core would link
+against a harness I/O module today and a keyboard/screen (or Super
+Serial) module later. **Not yet built** (through M4): `engine.s` stores
+to `COUT_TRAP`/`EXIT_TRAP` and reads `CLOCK_TRAP` directly (defs.inc);
+the vector module is worth building once a second I/O backend (M8's
+keyboard/screen) makes the indirection pay for itself.
 
 Amendments from adversarial review (both critics found the collision):
 - **$BF00-$BFFF is reserved in BOTH banks** — the memory-budget tables
@@ -158,22 +180,35 @@ Amendments from adversarial review (both critics found the collision):
   experiments, but the checked-in I/O module and all tooling assume
   $BFF0/$BFFF.
 
-## D12: Harness input and long-lived sessions — proposed (implement at M3)
+## D12: Harness input and long-lived sessions — accepted; landed differently than designed (M3, 2026-07-18)
 
-For the UCI bridge the engine must accept input and answer repeatedly
-without restarting. Design: memory-mapped **input traps** mirroring
-keyboard-strobe hardware shape — read $BFF1 = next input byte (pops),
-read $BFF2 = status ($80 when a byte is waiting). The engine polls
-status; the harness feeds bytes from stdin (a goroutine). One long-lived
-a2run-style process holds the session; the same engine code drives real
-keyboard hardware later by swapping the I/O module (D8). Prefer this
-over PC-callbacks (less hardware-faithful) and over $C000 keyboard
-emulation (drags in ROM/soft-switch surface the trap harness avoids).
-Also planned then: extract the a2run core into an importable Go package
-(load/run/traps as a library) so perft and gauntlet rigs call it
-in-process instead of scraping CLI output.
+Design: memory-mapped **input traps** mirroring keyboard-strobe hardware
+shape — read $BFF1 = next input byte (pops), read $BFF2 = status ($80
+when a byte is waiting). The engine polls status; the harness feeds
+bytes from stdin (a goroutine). One long-lived a2run-style process holds
+the session; the same engine code drives real keyboard hardware later by
+swapping the I/O module (D8). Prefer this over PC-callbacks (less
+hardware-faithful) and over $C000 keyboard emulation (drags in
+ROM/soft-switch surface the trap harness avoids).
 
-## D9: Time management: cycle/node budgets; VBL ($C019) polling on real hardware — proposed (amended)
+Both halves of the plan landed, but the input-trap half went unused: the
+`harness` package now implements $BFF1/$BFF2 (`TrapMemory`), and
+`(*Machine).Run` is resumable and returns on `WaitingForInput` so a
+driver can `SendInput` and continue — exactly as designed, and exercised
+by the harness package's own tests. And the a2run core was extracted
+into the importable `harness` Go package (load/run/traps as a library),
+so perft and gauntlet rigs (`internal/chesstest`) call it in-process
+instead of scraping CLI output, also as designed. But the UCI bridge
+(`cmd/uci`, `internal/ucibridge`) that motivated this decision doesn't
+poll the input traps at all: no 6502 code reads $BFF1/$BFF2 today.
+Instead the long-lived process is the Go UCI loop itself, which parses
+each `position`/`go` on the Go side, pokes the position directly into a
+fresh `Machine` per move, and carries the aux-bank TT forward between
+moves (see `internal/ucibridge`). Revisit if M8's real keyboard hardware
+needs the 6502 side to actually poll for input — until then the input
+traps are implemented but dormant.
+
+## D9: Time management: cycle/node budgets; VBL ($C019) polling on real hardware — accepted; cycle-budget scheme implemented (M3, 2026-07-18); hardware VBL polling still pending M8 (amended)
 
 No interrupts: go6502 doesn't emulate IRQ/NMI delivery, unenhanced IIe VBL
 polling is cheap anyway, and interrupt-free code is simpler to verify.
@@ -198,6 +233,11 @@ never saw — the clock would run 15-30x slow. Corrected scheme:
   hard abort at 2x, play the best move found so far in the current
   iteration if at least one root move completed and improved on the
   previous iteration's score — else the previous iteration's move.
+  Iteration 1 is abort-immune (`checkclock` is a no-op while `CURDEPTH`
+  < 2), so a hard abort can never land before at least one full
+  iteration has completed and produced a real root move — this closes
+  the M3 bug where an aborted partial iteration's move (arbitrary once
+  its TT entry was evicted) got reported instead (see docs/results.md).
 
 ## D10: Plain docs/ with this decision log, not full ADR directory — accepted
 

@@ -1,6 +1,6 @@
 // Command gentables generates asm/tables.s: the 0x88 difference-indexed
 // attack and direction tables, castling-rights masks, and piece offset
-// tables. Run via go:generate or `make tables`.
+// tables. Run via `make tables` (or `go run ./cmd/gentables` directly).
 //
 // Difference tables are indexed by (to - from + $77) & $FF for squares in
 // 0x88 coordinates. ATTACKTAB holds a bitmask of piece kinds that could

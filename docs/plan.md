@@ -105,27 +105,33 @@ The generator carries an overflow guard (drop + flag, slightly unsound in
 freak positions rather than corrupt).
 
 1. **Quiescence**: captures **plus queen promotions**, MVV/LVA, stand
-   pat, delta pruning (~1 pawn margin; add ~queen-minus-pawn for
-   promotion moves; **disabled at low phase** — in late endgames delta
-   pruning prunes the pawn captures that decide the game). When in
-   check at a QS node: no stand-pat; search evasions (cheap with the
-   attack tables, and removes a class of horizon mates micro-Max
-   accepts).
+   pat, delta pruning (**implemented, M4**: a 200cp margin against
+   alpha-minus-standpat, always on above phase 6, **disabled below
+   phase 6** — in late endgames delta pruning prunes the pawn captures
+   that decide the game; promotions are exempt from the prune
+   entirely, not given a separate margin). When in check at a QS node:
+   no stand-pat; search evasions (cheap with the attack tables, and
+   removes a class of horizon mates micro-Max accepts).
 2. **Iterative deepening** with TT/previous-best move first. Move
-   ordering: TT move, captures (MVV/LVA from generation), killers, rest
-   in generation order.
+   ordering is five move-loop passes over the generated list (search.s):
+   TT move, heavy captures (victim >= rook, MVV-tiered) and promotions,
+   light captures, killers, remaining quiets in generation order.
 3. **Transposition table** (D6): 32-bit Zobrist, 4096x8-byte entries in
    aux, 20 verify bits. The stored move matters more than the score at
-   our depths — and is therefore **pseudo-legality-checked before use**
-   (as are killers); a false-match move applied blindly desyncs piece
-   lists and accumulators silently. Mate scores stored/probed with the
+   our depths — and is therefore never applied blindly: the TT move
+   (and killer moves) are only searched if they **match an entry in the
+   freshly generated move list** for that node (pass 0 above), so a
+   hash collision that names a from/to pair absent from the real move
+   list simply matches nothing. Mate scores stored/probed with the
    standard ±ply adjustment.
 4. **Null move**, R=2, with micro-Max-style material-count zugzwang guard.
 5. **Killer moves** (2 per ply, validated like TT moves).
 6. **Futility + reverse futility** at depth <= 2 (saves make/eval cycles —
    extra valuable at 1 MHz).
 7. **Check extension** (bounded by the extension budget); mate scores as
-   MATE-ply.
+   MATE-ply. **Deferred to the rest of M4** — not yet implemented; null
+   move, killers, and futility/RFP landed first per the one-feature-
+   at-a-time SPRT-gate discipline above.
 8. **Repetition & draws** (semantics fixed by review — these interact
    with the TT): twofold repetition checked against game history AND the
    current search path, **before the TT probe** (a TT cutoff must never
@@ -175,10 +181,16 @@ previous iteration, else the previous iteration's move.
 
 ### Protocol and bridging
 
-The engine speaks a minimal text protocol over the I/O vector table
-(position in as FEN-ish or move list, bestmove out). `cmd/uci` wraps the
-emulated engine as a UCI engine for cutechess-cli and (eventually)
-lichess-bot — the MessChess/retro-Sargon pattern, but in-process Go.
+`cmd/uci` (M3) wraps the emulated engine as a UCI engine for cutechess-cli
+and (eventually) lichess-bot — the MessChess/retro-Sargon pattern, but
+in-process Go. As built, the position doesn't travel to the engine as
+text at all: the long-lived Go process parses UCI/FEN on the Go side,
+pokes the position directly into a fresh `Machine`'s memory per move,
+and carries the aux-bank TT forward between moves; only the move out is
+a harness trap (COUT, ASCII algebraic). The engine-side input traps
+($BFF1/$BFF2, D12) exist in the harness but aren't read by any 6502 code
+yet; a real on-engine text protocol behind the I/O vector table (D8) is
+still future work, not what powers today's UCI bridge.
 
 ## Performance model (to be validated at M1-M3)
 
@@ -219,10 +231,10 @@ fixed-node testing is structurally blind to them and would approve
 regressions. Cycles are just as deterministic and are time-faithful to
 the target machine).
 
-- **M0 — Dev loop (done).** ca65 -> a2run round trip; iie memory model
-  passing a2audit Language Card suite; go6502 modernized; ~100-170x
-  realtime (workload-dependent; benchmark rig lands with M1).
-- **M1 — Board + movegen + perft.** 0x88 movegen complete incl. castling,
+- **M0 — Dev loop (done, 2026-07-17).** ca65 -> a2run round trip; iie
+  memory model passing a2audit Language Card suite; go6502 modernized;
+  ~100-170x realtime (workload-dependent; benchmark rig lands with M1).
+- **M1 — Board + movegen + perft (done, 2026-07-17).** 0x88 movegen complete incl. castling,
   e.p., underpromotion; **perft(1-5) matches published values for
   startpos, Kiwipete, and 4-6 tricky positions, running inside a2run**
   (counts out via COUT as ASCII — exit codes are 8-bit); make/unmake
@@ -234,25 +246,29 @@ the target machine).
   config + bank-copy loader (LC write-enable dance + RAMWRT aux copies)
   proven by a hello-world touching main+LC+aux; a2run core extracted to
   an importable package (D12) so perft rigs run in-process.
-- **M2 — It plays chess.** Fixed-depth negamax + QS + stand-pat +
+- **M2 — It plays chess (done, 2026-07-17).** Fixed-depth negamax + QS + stand-pat +
   MVV/LVA + material/PSQT eval; MAXPLY + extension budget enforced;
   repetition + 50-move + insufficient-material handling per Search #8.
   Gate: mate-in-1/2/3 suite exact; >=97.5% vs random mover over 200
   games (draws allowed, losses not); 100-game legality torture vs a Go
   referee (every emitted move validated by an independent chess
   library); a WAC-subset baseline score recorded at fixed cycles.
-- **M3 — Real engine.** Iterative deepening, TT in aux, cycle-budget
-  time management, UCI bridge (D12 input traps + long-lived session),
+- **M3 — Real engine (done, 2026-07-18).** Iterative deepening, TT in aux, cycle-budget
+  time management, UCI bridge (D12; long-lived Go-side session per
+  cmd/uci — see Protocol and bridging for how it actually reached that),
   paired-openings suite wired into cutechess (deterministic engines
   from startpos replay one game — openings are what make N games carry
   N games of information), generous wall-clock margins so the emulated
   engine never forfeits. Gate: measured rating exists from the
   bracketing-pool gauntlet (whatever the number is); determinism
   verified (same position + same cycle budget = same move).
-- **M4 — Modern pruning.** Null move, killers (validated), futility/RFP,
+- **M4 — Modern pruning (in progress, started 2026-07-18; see
+  docs/results.md).** Null move, killers (validated), futility/RFP,
   check extension — **each individually SPRT-gated at fixed cycles**
   (no aggregate Elo bar: a milestone must not fail because one feature
-  overperformed and another was neutral); updated gauntlet number.
+  overperformed and another was neutral); updated gauntlet number. Null
+  move, killers, and futility/RFP have landed behind feature bits; check
+  extension has not (see Search #7).
 - **M5 — Eval and ordering polish.** PeSTO tuning pass, passed/doubled/
   isolated pawns (pawn hash), PVS, LMR, IID trials. Gate: SPRT wins only.
 - **M6 — Book + endgame touch-ups.** 2-8K compiled opening book in aux;
@@ -296,7 +312,7 @@ the target machine).
 | Stack overflow / unbounded extensions corrupt silently | MAXPLY + extension budget from day one; return-addresses-only hardware stack; debug stack-headroom assert (review finding — would have failed silently and late) |
 | Taper arithmetic eats the eval budget | /32 phase rescale + convexity shortcut (designed in, not retrofitted) |
 | Aux TT probe overhead swamps benefit | Measure at M3 with TT on/off self-play; entries/probe layout tunable; worst case: shrink TT into main LC RAM (~16 Elo penalty by Muller's rule) |
-| Corrupted TT/killer move desyncs board state | Mandatory pseudo-legality validation before use (D6) |
+| Corrupted TT/killer move desyncs board state | Mandatory list-match validation against the node's generated move list before use (D6) |
 | 16-bit score handling bloats hot paths | Split-table PSQT (lo/hi bytes) keeps adds 8-bit with carry; only compare/negate at 16-bit |
 | Search bug wrecks strength invisibly | Determinism + perft + fixed-cycle regression suite; every feature lands with SPRT evidence; legality torture rig vs Go referee |
 | Assembler/linker friction (banked segments) | D1: ld65 segment configs; loader copies LC/aux segments at init; hello-world for each bank wiring lands in M1; Makefile pins/warns on toolchain version |

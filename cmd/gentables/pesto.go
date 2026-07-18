@@ -143,5 +143,5 @@ var pestoEG = [6][64]int{
 }
 
 // order matches pestoMG/pestoEG: pawn, knight, bishop, rook, queen, king
-var pestoPieceMG = [6]int{82, 337, 365, 477, 1025, 0} // verify against source
-var pestoPieceEG = [6]int{94, 281, 297, 512, 936, 0}  // verify against source
+var pestoPieceMG = [6]int{82, 337, 365, 477, 1025, 0}
+var pestoPieceEG = [6]int{94, 281, 297, 512, 936, 0}
