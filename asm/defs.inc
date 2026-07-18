@@ -101,6 +101,7 @@ MUL1      = $D0
 MUL2      = $D1
 PSP0      = $D2         ; 16-bit: PSQT mg table pointer
 PSP1      = $D4         ; 16-bit: PSQT eg table pointer
+PDIRTY    = $D6         ; nonzero: a pawn or king moved; PSTRUCT is stale
 EVTMP     = $D7         ; eval scratch
 PSQSQ     = $D8         ; psqt: square (possibly rank-flipped)
 PSQPIECE  = $D9         ; psqt: piece byte
@@ -132,10 +133,17 @@ TTENTRY   = $F2         ; 8-byte staging copy of a TT entry:
 FEATURES  = $FA         ; search feature bits (poked by the rig)
 REMDEPTH  = $FB         ; scratch: remaining depth at this node
 FUTMARG   = $FC         ; scratch: futility margin work
+SEED      = $FD         ; eval-dither PRNG state; 0 (default) = no dither.
+                        ; On hardware this gets seeded from keypress
+                        ; timing; the bridge pokes a random byte.
+PSTRUCT   = $FE         ; 16-bit signed, white POV: pawn-structure +
+                        ; king-shield term, recomputed on pawn/king
+                        ; events and added to the tapered eval
 
 FT_NULL   = $01         ; null-move pruning (R=2)
 FT_KILLER = $02         ; killer-move ordering
 FT_FUTIL  = $04         ; futility + reverse-futility at depth <= 2
+FT_PSTRUCT = $08        ; pawn-structure + king-shield eval term
 
 ; TT bound codes (in entry byte 7, low 2 bits; 0 = empty entry)
 TT_UPPER = 1
@@ -195,6 +203,8 @@ INCHK      = $0D20      ; nonzero: side to move in check at this ply
 FUTILE     = $0D40      ; nonzero: prune quiets at this ply (futility)
 DELTATL    = $0D60      ; qs delta-pruning threshold (16-bit): a capture
 DELTATH    = $0D80      ;  is searched only if its victim value >= this
+UNDOPSL    = $0DA0      ; PSTRUCT saved by make, restored by unmake
+UNDOPSH    = $0DC0
 
 MOVESTACK  = $0E00      ; 3 bytes/move (from,to,flags); through $1FFF
 MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this

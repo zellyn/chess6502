@@ -132,6 +132,10 @@ make:
         sta HASHSTK2,x
         lda HASH3
         sta HASHSTK3,x
+        lda PSTRUCT
+        sta UNDOPSL,x
+        lda PSTRUCT+1
+        sta UNDOPSH,x
 .endif
         ldy FROM
         lda a:BOARD,y           ; force absolute: no lda zp,y mode exists
@@ -286,6 +290,17 @@ mknoech:
         eor #COLORMASK
         sta SIDE
         inc PLY
+.ifndef NOEVAL
+        ; refresh the pawn/king structure term if a pawn or king moved
+        lda PDIRTY
+        beq :+
+        lda FEATURES
+        and #FT_PSTRUCT
+        beq :+
+        jmp pawnterm            ; clears PDIRTY; rts returns to caller
+:       lda #0
+        sta PDIRTY
+.endif
         rts
 
 ; ---------------------------------------------------------------
@@ -416,6 +431,10 @@ unmake:
         sta HASH2
         lda HASHSTK3,x
         sta HASH3
+        lda UNDOPSL,x
+        sta PSTRUCT
+        lda UNDOPSH,x
+        sta PSTRUCT+1
 .endif
         ; clear TO, put the original piece byte back on FROM
         ldy UNDOTO,x

@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 
@@ -37,8 +38,15 @@ type Bridge struct {
 	// ms, overriding anything in the go command.
 	FixedBudgetMs uint64
 
-	pos *refchess.Position
-	aux []byte // carried-over aux bank (TT state); nil until first move
+	// Dither seeds the engine's eval-dither PRNG with a fresh random
+	// byte each move, breaking deterministic move repetition (the
+	// hardware build will seed this from input timing instead).
+	Dither bool
+
+	pos  *refchess.Position
+	aux  []byte // carried-over aux bank (TT state); nil until first move
+	rnd  func() byte
+	info string // "info depth ... score cp ..." from the last think
 }
 
 // Run processes UCI commands until quit/EOF. Protocol errors are
@@ -86,6 +94,9 @@ func (b *Bridge) Run(r io.Reader, w io.Writer) error {
 				say("info string engine error: %v", err)
 				say("bestmove 0000")
 				continue
+			}
+			if b.info != "" {
+				say("%s", b.info)
 			}
 			say("bestmove %s", move)
 		case "quit":
@@ -178,6 +189,13 @@ func (b *Bridge) think(args []string) (string, error) {
 	}
 	chesstest.SetBudget(m, b.Defs, budget, depth)
 	m.Mem.Main[b.Defs["HALFMOVE"]] = byte(min(b.pos.HalfmoveClock(), 255))
+	if b.Dither {
+		if b.rnd == nil {
+			r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+			b.rnd = func() byte { return byte(r.IntN(255) + 1) }
+		}
+		m.Mem.Main[b.Defs["SEED"]] = b.rnd()
+	}
 	if b.aux != nil {
 		copy(m.Mem.Aux[:], b.aux) // restore the TT
 	}
@@ -207,6 +225,10 @@ func (b *Bridge) think(args []string) (string, error) {
 	from := m.Mem.Main[b.Defs["BESTFROM"]]
 	to := m.Mem.Main[b.Defs["BESTTO"]]
 	flags := m.Mem.Main[b.Defs["BESTFLAGS"]]
+	score := int16(uint16(m.Mem.Main[b.Defs["SCORE"]]) |
+		uint16(m.Mem.Main[b.Defs["SCORE"]+1])<<8)
+	b.info = fmt.Sprintf("info depth %d score cp %d nodes %d",
+		m.Mem.Main[b.Defs["CURDEPTH"]], score, m.Cycles)
 	move := chesstest.MoveUCI(from, to, flags)
 	mv, err := refchess.ParseMove(move)
 	if err != nil {

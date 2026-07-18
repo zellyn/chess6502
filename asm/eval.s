@@ -23,6 +23,12 @@ psqcom: sta PSQPIECE
         ; phase contribution
         and #TYPEMASK
         tax
+        cpx #PAWN               ; pawn/king changes invalidate PSTRUCT
+        beq :+
+        cpx #KING
+        bne :++
+:       stx PDIRTY              ; (nonzero type byte)
+:
         lda PHASEVAL,x
         beq psqnoph
         sta MULCNT
@@ -177,6 +183,302 @@ hsloop: lda STMKEY,x
         rts
 
 ; ---------------------------------------------------------------
+; pawnterm: recompute PSTRUCT (white POV): doubled/isolated/passed
+; pawns and a minimal king shield. Called by make when PDIRTY is set
+; (a pawn or king changed) and by evalinit; ~800-1200 cycles, but pawn/
+; king events are a small fraction of makes. Uses $0200-$022F scratch.
+;
+; Terms (v1, to be SPRT-tuned): doubled -12 per extra pawn on a file;
+; isolated -12; passed bonus by rank; king shield +8 per own pawn on
+; the three files around a back-rank king (max 3 counted via files),
+; -10 for an open own file under the king.
+; ---------------------------------------------------------------
+PWCNT  = $0200          ; white pawns per file (8)
+PBCNT  = $0208          ; black pawns per file (8)
+PWMAX  = $0210          ; highest white pawn rank per file (0 if none)
+PBMAX  = $0218          ; highest black pawn rank per file (0 if none)
+PWMIN  = $0220          ; lowest white pawn rank per file (15 if none)
+PBMIN  = $0228          ; lowest black pawn rank per file (15 if none)
+
+PASSEDBONUS:
+        .byte 0, 8, 12, 18, 28, 45, 70, 0
+
+pawnterm:
+        lda #0
+        sta PDIRTY
+        sta PSTRUCT
+        sta PSTRUCT+1
+        ; clear the per-file tables
+        ldx #7
+ptclr:  sta PWCNT,x
+        sta PBCNT,x
+        sta PWMAX,x
+        sta PBMAX,x
+        lda #15
+        sta PWMIN,x
+        sta PBMIN,x
+        lda #0
+        dex
+        bpl ptclr
+        ; scan the piece lists for pawns
+        ldx #31
+ptscan: lda PIECESQ,x
+        cmp #NOSQ
+        beq ptnext
+        tay
+        lda a:BOARD,y
+        and #TYPEMASK
+        cmp #PAWN
+        bne ptnext
+        tya
+        and #$07
+        sta EVTMP               ; file
+        tya
+        lsr
+        lsr
+        lsr
+        lsr
+        sta MULCNT              ; rank
+        cpx #16
+        bcs ptblack
+        ldy EVTMP
+        lda PWCNT,y
+        clc
+        adc #1
+        sta PWCNT,y
+        lda MULCNT
+        cmp PWMAX,y
+        bcc :+
+        sta PWMAX,y
+:       lda MULCNT
+        cmp PWMIN,y
+        bcs ptnext
+        sta PWMIN,y
+        jmp ptnext
+ptblack:
+        ldy EVTMP
+        lda PBCNT,y
+        clc
+        adc #1
+        sta PBCNT,y
+        lda MULCNT
+        cmp PBMAX,y
+        bcc :+
+        sta PBMAX,y
+:       lda MULCNT
+        cmp PBMIN,y
+        bcs ptnext
+        sta PBMIN,y
+ptnext: dex
+        bpl ptscan
+
+        ; per-file terms into PSTRUCT (T0/T1 as signed accumulator)
+        lda #0
+        sta T0
+        sta T1
+        ldx #7
+ptfile: ; doubled: -12 per extra pawn (white subtracts, black adds)
+        lda PWCNT,x
+        beq ptwd0
+        sec
+        sbc #1
+        beq ptwiso
+        jsr ptsub12
+ptwiso: ; isolated white pawn(s): neighbors empty
+        jsr ptneighw
+        bne ptwpass
+        jsr ptsub12
+ptwpass:
+        ; white passed pawn (use the most advanced on the file):
+        ; no black pawn strictly ahead on x-1, x, x+1
+        lda PWMAX,x
+        sta EVTMP               ; r
+        jsr ptbmax3             ; A = max black rank on x-1..x+1
+        cmp EVTMP
+        bcs ptwd0               ; a blocker at rank > r ... (>= r is
+                                ;  conservative: adjacent same-rank
+                                ;  enemy pawns still guard the path)
+        ldy EVTMP
+        lda PASSEDBONUS,y
+        jsr ptadda
+ptwd0:  ; black side, mirrored (ranks flipped: advancement = low rank)
+        lda PBCNT,x
+        beq ptnextf
+        sec
+        sbc #1
+        beq ptbiso
+        jsr ptadd12
+ptbiso: jsr ptneighb
+        bne ptbpass
+        jsr ptadd12
+ptbpass:
+        lda PBMIN,x
+        sta EVTMP
+        jsr ptwmin3             ; A = min white rank on x-1..x+1
+        cmp EVTMP
+        beq ptnextf
+        bcc ptnextf             ; a white blocker at rank < r
+        lda #7
+        sec
+        sbc EVTMP               ; black advancement = 7 - rank
+        tay
+        lda PASSEDBONUS,y
+        jsr ptsuba
+ptnextf:
+        dex
+        bmi ptkings
+        jmp ptfile
+
+ptkings:
+        ; king shield: only for kings on their own back two ranks
+        ldy PIECESQ+0           ; white king
+        tya
+        and #$70
+        bne ptbk                ; not on rank 1 (shield only when home-ish)
+        tya
+        and #$07
+        jsr ptshieldw
+ptbk:   ldy PIECESQ+16          ; black king
+        tya
+        and #$70
+        cmp #$70
+        bne ptdone
+        tya
+        and #$07
+        jsr ptshieldb
+ptdone: lda T0
+        sta PSTRUCT
+        lda T1
+        sta PSTRUCT+1
+        rts
+
+; helpers: T0/T1 16-bit signed accumulator ---------------------------
+ptadda: clc                     ; A (unsigned small) added
+        adc T0
+        sta T0
+        bcc :+
+        inc T1
+:       rts
+ptsuba: sta EVTMP
+        sec
+        lda T0
+        sbc EVTMP
+        sta T0
+        bcs :+
+        dec T1
+:       rts
+ptadd12:
+        lda #12
+        bne ptadda              ; always
+ptsub12:
+        lda #12
+        bne ptsuba              ; always
+
+; ptneighw/b: Z set if both neighbor files have no own pawns
+ptneighw:
+        lda #0
+        cpx #0
+        beq :+
+        ora PWCNT-1,x
+:       cpx #7
+        beq :+
+        ora PWCNT+1,x
+:       rts
+ptneighb:
+        lda #0
+        cpx #0
+        beq :+
+        ora PBCNT-1,x
+:       cpx #7
+        beq :+
+        ora PBCNT+1,x
+:       rts
+
+; ptbmax3: A = max(PBMAX[x-1], PBMAX[x], PBMAX[x+1])
+ptbmax3:
+        lda PBMAX,x
+        cpx #0
+        beq :+
+        cmp PBMAX-1,x
+        bcs :+
+        lda PBMAX-1,x
+:       cpx #7
+        beq :+
+        cmp PBMAX+1,x
+        bcs :+
+        lda PBMAX+1,x
+:       rts
+; ptwmin3: A = min(PWMIN[x-1], PWMIN[x], PWMIN[x+1])
+ptwmin3:
+        lda PWMIN,x
+        cpx #0
+        beq :+
+        cmp PWMIN-1,x
+        bcc :+
+        lda PWMIN-1,x
+:       cpx #7
+        beq :+
+        cmp PWMIN+1,x
+        bcc :+
+        lda PWMIN+1,x
+:       rts
+
+; ptshieldw/b: A = king file; +8 per shielded file, -10 for an open
+; own file under the king. Clobbers Y, EVTMP.
+ptshieldw:
+        sta EVTMP
+        tay
+        lda PWCNT,y
+        beq :+
+        lda #8
+        jsr ptadda
+:       ldy EVTMP
+        beq :+                  ; file a: no left neighbor
+        lda PWCNT-1,y
+        beq :+
+        lda #8
+        jsr ptadda
+:       ldy EVTMP
+        cpy #7
+        beq :+
+        lda PWCNT+1,y
+        beq :+
+        lda #8
+        jsr ptadda
+:       ldy EVTMP
+        lda PWCNT,y
+        bne :+
+        lda #10                 ; open file under the king
+        jsr ptsuba
+:       rts
+ptshieldb:
+        sta EVTMP
+        tay
+        lda PBCNT,y
+        beq :+
+        lda #8
+        jsr ptsuba
+:       ldy EVTMP
+        beq :+
+        lda PBCNT-1,y
+        beq :+
+        lda #8
+        jsr ptsuba
+:       ldy EVTMP
+        cpy #7
+        beq :+
+        lda PBCNT+1,y
+        beq :+
+        lda #8
+        jsr ptsuba
+:       ldy EVTMP
+        lda PBCNT,y
+        bne :+
+        lda #10
+        jsr ptadda
+:       rts
+
+; ---------------------------------------------------------------
 ; evalinit: recompute accumulators and the Zobrist hash from the board
 ; (root setup, and a debug cross-check against the incremental path).
 ; ---------------------------------------------------------------
@@ -222,7 +524,7 @@ evinext:
         cmp #NOSQ
         beq :+
         jsr hashep
-:       rts
+:       jmp pawnterm            ; initial PSTRUCT (clears PDIRTY)
 
 ; ---------------------------------------------------------------
 ; eval: SCORE = tapered eval from the side to move's point of view,
@@ -325,7 +627,19 @@ evnosgn:
         lda EGSCORE+1
         adc MUL1
         sta SCORE+1
-evpov:  ; side-to-move POV
+evpov:  ; pawn-structure/king-shield term (white POV, kept current by
+        ; make via PDIRTY)
+        lda FEATURES
+        and #FT_PSTRUCT
+        beq :+
+        clc
+        lda SCORE
+        adc PSTRUCT
+        sta SCORE
+        lda SCORE+1
+        adc PSTRUCT+1
+        sta SCORE+1
+:       ; side-to-move POV
         lda SIDE
         beq evwtm
         sec
@@ -342,4 +656,20 @@ evwtm:  ; tempo
         sta SCORE
         bcc :+
         inc SCORE+1
-:       rts
+:       ; dither: 0-3cp of seeded noise breaks deterministic move
+        ; repetition (hardware seeds SEED from input timing; the bridge
+        ; pokes a random byte; 0 = off, keeping tests reproducible)
+        lda SEED
+        beq evdone
+        asl
+        clc
+        adc SEED                ; seed = seed*3 + 29
+        adc #29
+        sta SEED
+        and #$03
+        clc
+        adc SCORE
+        sta SCORE
+        bcc evdone
+        inc SCORE+1
+evdone: rts

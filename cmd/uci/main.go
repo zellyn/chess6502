@@ -16,6 +16,7 @@ func main() {
 		binfile  = flag.String("bin", "asm/engine.bin", "engine binary")
 		defsfile = flag.String("defs", "asm/defs.inc", "memory-layout defs")
 		budget   = flag.Uint64("budget", 0, "fixed emulated ms per move (0: derive from go command)")
+		dither   = flag.Bool("dither", false, "seed per-move eval dither (breaks deterministic repetition)")
 	)
 	flag.Parse()
 
@@ -29,7 +30,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	b := &ucibridge.Bridge{Bin: bin, Defs: defs, FixedBudgetMs: *budget}
+	b := &ucibridge.Bridge{Bin: bin, Defs: defs, FixedBudgetMs: *budget, Dither: *dither}
 	if err := b.Run(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
