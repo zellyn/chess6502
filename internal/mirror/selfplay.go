@@ -1,0 +1,343 @@
+package mirror
+
+import (
+	"fmt"
+	"math"
+	"math/rand/v2"
+	"sync"
+)
+
+// PlayerCfg configures one side of a self-play game.
+type PlayerCfg struct {
+	Features byte
+	Weights  Weights
+	Depth    int
+}
+
+// Sample is one labeled training position for Texel tuning: the eval
+// decomposed into a fixed base (taper + side-to-move tempo, white POV)
+// and the pawn-structure feature counts, plus the game outcome.
+type Sample struct {
+	Base int
+	F    pawnFeatures
+	R    float64 // game result, white POV: 1, 0.5, 0
+}
+
+// GameRec is one finished self-play game.
+type GameRec struct {
+	Result  float64 // white POV
+	Plies   int
+	Samples []Sample
+	Reason  string
+}
+
+// PlayGame plays one fixed-depth game from the given opening (UCI
+// moves). Each side gets its own engine (own TT, carried across the
+// game like the bridge carries aux). Dither is on: a fresh random SEED
+// byte per move, as the UCI bridge pokes. With collect, quiet non-check
+// positions after ply 8 are sampled for tuning.
+func PlayGame(white, black PlayerCfg, opening []string, rnd *rand.Rand, collect bool) (GameRec, error) {
+	start, err := ParseFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+	if err != nil {
+		return GameRec{}, err
+	}
+	we, be := NewEngine(), NewEngine()
+	we.Features, we.Weights = white.Features, white.Weights
+	be.Features, be.Weights = black.Features, black.Weights
+
+	gp := *start
+	for _, ms := range opening {
+		if err := applyUCI(we, &gp, ms); err != nil {
+			return GameRec{}, fmt.Errorf("opening %v: %w", opening, err)
+		}
+	}
+
+	rec := GameRec{}
+	seen := map[uint32]int{}
+	var pending []Sample // samples awaiting the game result
+
+	for ply := 0; ; ply++ {
+		eng := we
+		cfg := white
+		if gp.Side != 0 {
+			eng, cfg = be, black
+		}
+		eng.SetPosition(&gp)
+		seen[eng.Pos.Hash]++
+
+		// Adjudication (the referee's job in the real rig).
+		inChk := eng.curInCheck()
+		switch {
+		case gp.Halfmove >= 100:
+			rec.Reason = "50-move"
+		case seen[eng.Pos.Hash] >= 3:
+			rec.Reason = "threefold"
+		case gp.Phase < 2 && !eng.anyPawn():
+			rec.Reason = "material"
+		case ply >= 400:
+			rec.Reason = "move-cap"
+		}
+		if rec.Reason != "" {
+			rec.Result = 0.5
+			break
+		}
+
+		if collect && ply >= 8 && !inChk && isQuiet(eng) {
+			base := eng.Pos.taperedWhite()
+			if gp.Side == 0 {
+				base += Tempo
+			} else {
+				base -= Tempo
+			}
+			pending = append(pending, Sample{Base: base, F: *extractPawnFeatures(&eng.Pos)})
+		}
+
+		eng.Seed = byte(rnd.IntN(255)) + 1 // dither on
+		best, _ := eng.SearchFixed(cfg.Depth)
+		if best.From == NoSq {
+			if inChk { // checkmate: side to move loses
+				if gp.Side == 0 {
+					rec.Result = 0
+				} else {
+					rec.Result = 1
+				}
+				rec.Reason = "mate"
+			} else {
+				rec.Result = 0.5
+				rec.Reason = "stalemate"
+			}
+			break
+		}
+		eng.SetPosition(&gp) // rewind any search-side state, then commit
+		eng.make(best)
+		gp = eng.Pos
+		gp.Ply = 0
+		rec.Plies++
+	}
+	for i := range pending {
+		pending[i].R = rec.Result
+	}
+	rec.Samples = pending
+	return rec, nil
+}
+
+// isQuiet reports whether a root quiescence sweep returns the static
+// eval (no capture improves the position). Dither is disabled during
+// the check.
+func isQuiet(e *Engine) bool {
+	seed := e.Seed
+	e.Seed = 0
+	static := e.eval()
+	e.MaxDepth = 0
+	e.Pos.Ply = 0
+	e.inChk[0] = false // caller ensured not in check
+	e.alpha[0] = -Inf
+	e.beta[0] = Inf
+	qv := e.search()
+	e.Seed = seed
+	return qv == static
+}
+
+// applyUCI plays a UCI move string on gp using eng as scratch.
+func applyUCI(eng *Engine, gp *Position, ms string) error {
+	eng.SetPosition(gp)
+	for _, m := range eng.generate(false) {
+		if m.UCI() != ms {
+			continue
+		}
+		eng.make(m)
+		king := eng.Pos.PieceSq[int(eng.Pos.Side^ColorMask)<<1]
+		if eng.attacked(king, eng.Pos.Side) {
+			eng.unmake()
+			continue
+		}
+		*gp = eng.Pos
+		gp.Ply = 0
+		return nil
+	}
+	return fmt.Errorf("illegal or unknown move %q", ms)
+}
+
+// MatchResult accumulates A's wins/draws/losses.
+type MatchResult struct {
+	Wins, Draws, Losses int
+}
+
+func (r *MatchResult) Games() int { return r.Wins + r.Draws + r.Losses }
+
+func (r *MatchResult) Score() float64 {
+	if r.Games() == 0 {
+		return 0.5
+	}
+	return (float64(r.Wins) + 0.5*float64(r.Draws)) / float64(r.Games())
+}
+
+// EloDiff returns the Elo estimate and ~95% margin (same formula as
+// internal/sprt.Result.EloDiff).
+func (r *MatchResult) EloDiff() (elo, margin float64) {
+	n := float64(r.Games())
+	if n == 0 {
+		return 0, math.Inf(1)
+	}
+	s := r.Score()
+	if s <= 0 {
+		return math.Inf(-1), math.Inf(1)
+	}
+	if s >= 1 {
+		return math.Inf(1), math.Inf(1)
+	}
+	elo = -400 * math.Log10(1/s-1)
+	w, d, l := float64(r.Wins)/n, float64(r.Draws)/n, float64(r.Losses)/n
+	varS := w*(1-s)*(1-s) + d*(0.5-s)*(0.5-s) + l*s*s
+	se := math.Sqrt(varS / n)
+	if se > 0 {
+		lo, hi := s-1.96*se, s+1.96*se
+		lo = math.Max(lo, 1e-9)
+		hi = math.Min(hi, 1-1e-9)
+		margin = (-400*math.Log10(1/hi-1) + 400*math.Log10(1/lo-1)) / 2
+	}
+	return elo, margin
+}
+
+func (r *MatchResult) String() string {
+	elo, margin := r.EloDiff()
+	return fmt.Sprintf("+%d =%d -%d  score %.1f%%  elo %+.0f +/- %.0f",
+		r.Wins, r.Draws, r.Losses, 100*r.Score(), elo, margin)
+}
+
+// Match plays pairs of games (colors swapped) between A and B over the
+// opening set, in parallel. Openings cycle; each worker gets its own
+// deterministic RNG stream for dither.
+func Match(a, b PlayerCfg, openings [][]string, pairs, workers int, seed uint64) (*MatchResult, error) {
+	if workers <= 0 {
+		workers = 1
+	}
+	type job struct{ pair int }
+	jobs := make(chan int)
+	var mu sync.Mutex
+	res := &MatchResult{}
+	var firstErr error
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rnd := rand.New(rand.NewPCG(seed, uint64(w)^0x9e3779b97f4a7c15))
+			for pair := range jobs {
+				opening := openings[pair%len(openings)]
+				g1, err1 := PlayGame(a, b, opening, rnd, false) // A white
+				g2, err2 := PlayGame(b, a, opening, rnd, false) // A black
+				mu.Lock()
+				if err1 != nil && firstErr == nil {
+					firstErr = err1
+				}
+				if err2 != nil && firstErr == nil {
+					firstErr = err2
+				}
+				if err1 == nil {
+					addResult(res, g1.Result)
+				}
+				if err2 == nil {
+					addResult(res, 1-g2.Result)
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	go func() {
+		for p := range pairs {
+			jobs <- p
+		}
+		close(jobs)
+	}()
+	wg.Wait()
+	return res, firstErr
+}
+
+// addResult records a game from A's POV (score 1 = A won).
+func addResult(r *MatchResult, aScore float64) {
+	switch aScore {
+	case 1:
+		r.Wins++
+	case 0:
+		r.Losses++
+	default:
+		r.Draws++
+	}
+}
+
+// GenOpenings builds n distinct opening lines: a base line plus a
+// seeded random 2-ply tail, kept only if the resulting position's
+// static eval is roughly balanced (mirroring sprt.GenOpenings, with
+// the mirror itself as the balance filter at depth 2).
+func GenOpenings(bases [][]string, n int, seed uint64) ([][]string, error) {
+	rnd := rand.New(rand.NewPCG(seed, 0x09e41145))
+	eng := NewEngine()
+	start, err := ParseFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+	if err != nil {
+		return nil, err
+	}
+	var out [][]string
+	seen := map[string]bool{}
+	for tries := 0; len(out) < n && tries < n*200; tries++ {
+		base := bases[rnd.IntN(len(bases))]
+		gp := *start
+		line := make([]string, 0, len(base)+2)
+		ok := true
+		for _, ms := range base {
+			if err := applyUCI(eng, &gp, ms); err != nil {
+				ok = false
+				break
+			}
+			line = append(line, ms)
+		}
+		for range 2 {
+			if !ok {
+				break
+			}
+			legal := legalMoves(eng, &gp)
+			if len(legal) == 0 {
+				ok = false
+				break
+			}
+			m := legal[rnd.IntN(len(legal))]
+			line = append(line, m.UCI())
+			if err := applyUCI(eng, &gp, m.UCI()); err != nil {
+				ok = false
+				break
+			}
+		}
+		key := fmt.Sprint(line)
+		if !ok || seen[key] {
+			continue
+		}
+		eng.ClearTT()
+		eng.SetPosition(&gp)
+		eng.Seed = 0
+		_, score := eng.SearchFixed(2)
+		if score > 60 || score < -60 {
+			continue
+		}
+		seen[key] = true
+		out = append(out, line)
+	}
+	if len(out) < n {
+		return nil, fmt.Errorf("only generated %d/%d openings", len(out), n)
+	}
+	return out, nil
+}
+
+// legalMoves returns the legal moves in gp (helper for openings).
+func legalMoves(eng *Engine, gp *Position) []Move {
+	eng.SetPosition(gp)
+	var out []Move
+	for _, m := range eng.generate(false) {
+		eng.make(m)
+		king := eng.Pos.PieceSq[int(eng.Pos.Side^ColorMask)<<1]
+		if !eng.attacked(king, eng.Pos.Side) {
+			out = append(out, m)
+		}
+		eng.unmake()
+	}
+	return out
+}
