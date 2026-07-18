@@ -7,6 +7,8 @@ package sprt
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
+	"strings"
 	"sync"
 
 	"github.com/zellyn/chess6502/internal/chesstest"
@@ -111,11 +113,76 @@ func (r *Result) LLR(elo0, elo1 float64) float64 {
 	return (s1 - s0) * (2*s*n - n*(s0+s1)) / (2 * varS)
 }
 
+// GenOpenings extends the curated openings with seeded random 2-ply
+// tails, keeping only lines the engine itself evaluates as roughly
+// balanced (|eval| <= 60cp at depth 2). Deterministic engines replay
+// identical games from identical starts, so opening variety is what
+// makes each game pair carry information.
+func GenOpenings(bin []byte, defs chesstest.Defs, n int) [][]string {
+	rnd := rand.New(rand.NewPCG(0x09e41145, 42))
+	out := make([][]string, 0, n)
+	seen := map[string]bool{}
+	for len(out) < n {
+		base := Openings[rnd.IntN(len(Openings))]
+		ref, err := refchess.ParseFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+		if err != nil {
+			panic(err)
+		}
+		line := make([]string, 0, len(base)+2)
+		ok := true
+		for _, ms := range base {
+			mv, _ := refchess.ParseMove(ms)
+			if err := ref.Make(mv); err != nil {
+				ok = false
+				break
+			}
+			line = append(line, ms)
+		}
+		if !ok {
+			continue
+		}
+		for range 2 {
+			legal := ref.LegalMoves()
+			if len(legal) == 0 {
+				ok = false
+				break
+			}
+			mv := legal[rnd.IntN(len(legal))]
+			if err := ref.Make(mv); err != nil {
+				ok = false
+				break
+			}
+			line = append(line, mv.String())
+		}
+		key := strings.Join(line, " ")
+		if !ok || seen[key] {
+			continue
+		}
+		// Balance filter: quick engine eval of the resulting position.
+		pos, err := chesstest.ParseFEN(ref.FEN())
+		if err != nil {
+			continue
+		}
+		res, err := chesstest.SearchMove(bin, defs, pos, 2, 2_000_000_000)
+		if err != nil || res.Move == "" || res.Score > 60 || res.Score < -60 {
+			continue
+		}
+		seen[key] = true
+		out = append(out, line)
+	}
+	return out
+}
+
 // Run plays the match. Openings cycle; each pair is one opening with
-// colors swapped.
+// colors swapped. With more pairs than curated openings, generated
+// balanced variations keep every pair distinct.
 func Run(cfg Config) *Result {
 	if cfg.Parallel <= 0 {
 		cfg.Parallel = 1
+	}
+	openings := Openings
+	if cfg.Pairs > len(openings) {
+		openings = GenOpenings(cfg.Bin, cfg.Defs, cfg.Pairs)
 	}
 	res := &Result{}
 	var mu sync.Mutex
@@ -128,7 +195,7 @@ func Run(cfg Config) *Result {
 			go func(opening int, aWhite bool) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				outcome, err := playGame(cfg, Openings[opening%len(Openings)], aWhite)
+				outcome, err := playGame(cfg, openings[opening%len(openings)], aWhite)
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {

@@ -10,8 +10,8 @@
 package main
 
 import (
-	"math/rand/v2"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"strings"
 )

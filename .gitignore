@@ -1,4 +1,6 @@
+/a2run
+/go.work
+/go.work.sum
 *.o
 *.bin
 *.lbl
-a2run

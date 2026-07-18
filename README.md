@@ -15,11 +15,11 @@ built to demonstrate how far chess engine theory has advanced since the
 Requires: Go and cc65 (`brew install cc65`). Dependencies
 ([go6502](https://github.com/zellyn/go6502),
 [goapple2](https://github.com/zellyn/goapple2)) resolve as normal Go
-modules; for hacking on them locally, `go.work` points at sibling
-checkouts at `../go6502` and `../goapple2`.
+modules; to hack on them locally, create a `go.work` pointing at sibling
+checkouts (`go work init . ../go6502 ../goapple2`).
 
 ```sh
-make    # assemble + run the smoke test in the harness, run all tests
+make    # assemble + run the smoke tests, build the engine, run all tests
 ```
 
 `cmd/a2run` runs 6502 binaries against the cycle-accurate go6502 core and

@@ -278,10 +278,17 @@ sprep:  ldy PLY
         sta INCHK,y
         beq :+
         jmp snode               ; in check: no null, no RFP, no futility
-:       ; ---- null move: FT_NULL, remaining >= 2, phase >= 3, beta
-        ; below the mate zone
+:       ; ---- null move: FT_NULL, not right after a null, remaining
+        ; >= 2, phase >= 3, beta below the mate zone
         lda FEATURES
         and #FT_NULL
+        bne :+
+        jmp snonull
+:       lda PLY
+        beq :+
+        tax
+        lda UNDOFROM-1,x        ; NOSQ marks the parent move as a null
+        cmp #NOSQ
         bne :+
         jmp snonull
 :       lda MAXDEPTH
@@ -411,6 +418,8 @@ sprepj: jmp snode
 ; clock, and the side flip change; accumulators are untouched.
 makenull:
         ldx PLY
+        lda #NOSQ               ; mark this ply's move as a null
+        sta UNDOFROM,x
         lda EPSQ
         sta UNDOEP,x
         lda HALFMOVE
