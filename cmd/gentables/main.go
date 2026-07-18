@@ -108,6 +108,20 @@ func main() {
 	b.WriteString("\n.align 256\n")
 	emit(&b, "SLOTTAB", slotTab[:])
 
+	// TYPEATK2[piece&$0F] = the attack bit this piece contributes.
+	// Pawns get their color's direction bit, so wrong-direction pawns
+	// fast-reject through the same AND as every other piece — no
+	// special case in attacked(). (Starts page-aligned after SLOTTAB.)
+	var typeAtk2 [16]byte
+	atkBits := []byte{0, 0 /*per color below*/, atkKnight, atkDiag, atkOrtho, atkDiag | atkOrtho, atkKing, 0}
+	for typ := 1; typ <= 6; typ++ {
+		typeAtk2[typ] = atkBits[typ]
+		typeAtk2[8|typ] = atkBits[typ]
+	}
+	typeAtk2[1] = atkWPawn
+	typeAtk2[8|1] = atkBPawn
+	emit(&b, "TYPEATK2", typeAtk2[:])
+
 	// TT addressing: TTPTR = TTBASE + index*8, index = (HASH1&0x0F)<<8 | HASH0.
 	// SHL3TAB/SHR5TAB split HASH0*8 across the pointer bytes; TTHITAB puts
 	// HASH1's nibble in bits 3-6. Page-aligned so lda abs,x never crosses.

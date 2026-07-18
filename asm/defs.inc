@@ -64,7 +64,7 @@ MVFLAGS   = $15
 ATSQ      = $16         ; attacked(): target square
 ATSIDE    = $17         ; attacked(): attacking side (0 or COLORMASK)
 ATTMP     = $18         ; attacked(): scratch (candidate from-square)
-ATSLOT    = $19         ; attacked(): scratch (slot loop)
+; $19 free (was ATSLOT; attacked() now counts slots in X)
 GTMP      = $1A         ; movegen scratch
 GSLOT     = $1B         ; movegen: current slot
 GFROM     = $1C         ; movegen: current from-square
@@ -80,7 +80,8 @@ DIFF      = $26         ; attacked(): saved difference index
 ATDELTA   = $27         ; attacked(): slider step delta
 GCOUNT    = $28         ; movegen: offset-loop counter
 CRTMP     = $29         ; castle helpers: rook piece byte
-ATT77     = $2A         ; attacked(): ATSQ + $77, precomputed at entry
+ATT78     = $2A         ; attacked(): ATSQ + $78 ($77 + 1 for the
+                        ;  carry-clear complement-add diff trick)
 VICTIM    = $2B         ; make: captured piece byte
 
 BOARD     = $40         ; 128-byte 0x88 board, $40..$BF

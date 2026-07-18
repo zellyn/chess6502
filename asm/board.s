@@ -7,56 +7,52 @@ TYPEATKTAB:
 
 ; ---------------------------------------------------------------
 ; attacked: is ATSQ attacked by any piece of side ATSIDE (0/$08)?
-; Out: carry set if attacked. Clobbers A,X,Y, ATSLOT/ATTMP/ATBITS/DIFF/ATDELTA.
+; Out: carry set if attacked. Clobbers A,X,Y, ATTMP/ATBITS/DIFF/
+; ATDELTA/ATT78. Self-modifying (RAM-resident, IRQs off): the side's
+; slot-half is patched into this routine's own PIECESQ operand low
+; bytes ($00/$10; PIECESQ is page-aligned and X <= $0F, so the abs,x
+; reads never cross a page). Scans slots high-to-low.
 ; ---------------------------------------------------------------
 attacked:
+        lda ATSIDE
+        asl                     ; 0 or $10 = slot-half base
+        sta atslot0+1
+        sta atslot1+1
         lda ATSQ
         clc
-        adc #$77
-        sta ATT77               ; diff = ATT77 - from, computed per slot
-        lda ATSIDE
-        asl                     ; slot base: 0 or $10
-        sta ATSLOT
-atloop: ldy ATSLOT
-        lda PIECESQ,y
+        adc #$78                ; $77 + 1: absorbed by the carry-clear
+        sta ATT78               ;  adc below (eor #$FF is $FF-from)
+        ldx #$0F
+atloop:
+atslot0:lda PIECESQ,x           ; operand lo byte is SMC ($00/$10)
         cmp #NOSQ
-        beq atnext
-        sta ATTMP               ; candidate attacker square
-        lda ATT77
-        sec
-        sbc ATTMP
+        beq atnext              ; tombstone
+        ; diff = ATSQ - from + $77, via complement + add. The cmp
+        ; above fell through, so A < $FF and carry is provably CLEAR
+        ; here - the +1 it doesn't add is baked into ATT78. Do NOT
+        ; reorder these three instructions.
+        eor #$FF
+        adc ATT78
         sta DIFF
         tay
         lda ATTACKTAB,y
-        beq atnext              ; no geometric relation at all
+        beq atnext              ; no geometric relation (hot exit)
         sta ATBITS
-        ldx ATTMP
-        lda BOARD,x
-        and #TYPEMASK
-        tax
-        cpx #PAWN
-        bne atnotpawn
-        ; pawn: direction depends on attacker color
-        lda ATSIDE
-        bne atbpawn
-        lda ATBITS
-        and #ATK_WPAWN
-        bne athit
-        beq atnext              ; always
-atbpawn:
-        lda ATBITS
-        and #ATK_BPAWN
-        bne athit
-        beq atnext              ; always
-atnotpawn:
-        lda TYPEATKTAB,x
+atslot1:lda PIECESQ,x           ; reload from-square (operand SMC too)
+        sta ATTMP
+        tay
+        lda a:BOARD,y
+        and #TYPEMASK|COLORMASK
+        tay
+        lda TYPEATK2,y          ; piece's attack bit (pawns by color)
         and ATBITS
-        beq atnext
-        cpx #KNIGHT
-        beq athit
-        cpx #KING
-        beq athit
-        ; slider: walk the ray from attacker toward ATSQ checking blockers
+        beq atnext              ; wrong piece for this diff, incl.
+                                ;  wrong-direction pawns
+        cmp #ATK_DIAG
+        bcc athit               ; $01/$02: knight/king, no ray to walk
+        cmp #ATK_WPAWN
+        bcs athit               ; $10/$20: pawn, adjacent
+        ; slider: walk the ray from attacker toward ATSQ
         ldy DIFF
         lda DELTATAB,y
         sta ATDELTA
@@ -65,15 +61,13 @@ atwalk: clc
         adc ATDELTA
         cmp ATSQ
         beq athit
-        tax
-        lda BOARD,x
+        tay
+        lda a:BOARD,y
         bne atnext              ; blocked
-        txa
+        tya
         jmp atwalk
-atnext: inc ATSLOT
-        lda ATSLOT
-        and #$0F
-        bne atloop
+atnext: dex
+        bpl atloop
         clc
         rts
 athit:  sec
