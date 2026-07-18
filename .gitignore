@@ -1,3 +1,4 @@
 *.o
 *.bin
+*.lbl
 a2run

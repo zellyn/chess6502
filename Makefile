@@ -10,9 +10,9 @@ ifneq ($(CC65_VERSION),$(TESTED_CC65))
 $(warning ca65 is $(CC65_VERSION); this repo was last tested with $(TESTED_CC65))
 endif
 
-.PHONY: all hello test clean
+.PHONY: all hello perft test clean
 
-all: hello test
+all: hello perft test
 
 hello: hello/hello.bin
 	go run ./cmd/a2run -bin hello/hello.bin -org 0x2000
@@ -20,6 +20,15 @@ hello: hello/hello.bin
 hello/hello.bin: hello/hello.s hello/raw2000.cfg
 	$(CA65) hello/hello.s -o hello/hello.o
 	$(LD65) -C hello/raw2000.cfg hello/hello.o -o $@
+
+perft: asm/perft.bin
+
+asm/tables.s: cmd/gentables/main.go
+	go run ./cmd/gentables
+
+asm/perft.bin: asm/perft.s asm/board.s asm/movegen.s asm/defs.inc asm/tables.s asm/perft.cfg
+	cd asm && $(CA65) perft.s -o perft.o
+	cd asm && $(LD65) -C perft.cfg perft.o -o perft.bin -Ln perft.lbl
 
 test:
 	go build ./...

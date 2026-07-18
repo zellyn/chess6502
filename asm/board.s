@@ -1,0 +1,327 @@
+; Board primitives: attacked, make, unmake. See defs.inc for layout.
+
+; TYPEATKTAB[type] = attack-table bits that mean "this piece type attacks
+; across this difference (geometrically)". Pawns are special-cased.
+TYPEATKTAB:
+        .byte 0, 0, ATK_KNIGHT, ATK_DIAG, ATK_ORTHO, ATK_DIAG|ATK_ORTHO, ATK_KING
+
+; ---------------------------------------------------------------
+; attacked: is ATSQ attacked by any piece of side ATSIDE (0/$08)?
+; Out: carry set if attacked. Clobbers A,X,Y, ATSLOT/ATTMP/ATBITS/DIFF/ATDELTA.
+; ---------------------------------------------------------------
+attacked:
+        lda ATSIDE
+        asl                     ; slot base: 0 or $10
+        sta ATSLOT
+atloop: ldy ATSLOT
+        lda PIECESQ,y
+        cmp #NOSQ
+        beq atnext
+        sta ATTMP               ; candidate attacker square
+        lda ATSQ
+        sec
+        sbc ATTMP
+        clc
+        adc #$77
+        sta DIFF
+        tay
+        lda ATTACKTAB,y
+        beq atnext              ; no geometric relation at all
+        sta ATBITS
+        ldx ATTMP
+        lda BOARD,x
+        and #TYPEMASK
+        tax
+        cpx #PAWN
+        bne atnotpawn
+        ; pawn: direction depends on attacker color
+        lda ATSIDE
+        bne atbpawn
+        lda ATBITS
+        and #ATK_WPAWN
+        bne athit
+        beq atnext              ; always
+atbpawn:
+        lda ATBITS
+        and #ATK_BPAWN
+        bne athit
+        beq atnext              ; always
+atnotpawn:
+        lda TYPEATKTAB,x
+        and ATBITS
+        beq atnext
+        cpx #KNIGHT
+        beq athit
+        cpx #KING
+        beq athit
+        ; slider: walk the ray from attacker toward ATSQ checking blockers
+        ldy DIFF
+        lda DELTATAB,y
+        sta ATDELTA
+        lda ATTMP
+atwalk: clc
+        adc ATDELTA
+        cmp ATSQ
+        beq athit
+        tax
+        lda BOARD,x
+        bne atnext              ; blocked
+        txa
+        jmp atwalk
+atnext: inc ATSLOT
+        lda ATSLOT
+        and #$0F
+        bne atloop
+        clc
+        rts
+athit:  sec
+        rts
+
+; ---------------------------------------------------------------
+; slotof: A = piece byte -> Y = slot in PIECESQ. Clobbers A, GTMP.
+; slot = index | (color ? 16 : 0)
+; ---------------------------------------------------------------
+slotof: sta GTMP
+        and #COLORMASK
+        asl                     ; 0 or $10
+        sta CAPSLOT
+        lda GTMP
+        lsr
+        lsr
+        lsr
+        lsr
+        ora CAPSLOT
+        tay
+        rts
+
+; ---------------------------------------------------------------
+; make: play FROM/TO/MVFLAGS. Saves undo state indexed by PLY,
+; updates board, piece lists, castling rights, ep, side; PLY++.
+; Clobbers A,X,Y and most scratch.
+; ---------------------------------------------------------------
+make:
+        ldx PLY
+        lda CASTLE
+        sta UNDOCASTLE,x
+        lda EPSQ
+        sta UNDOEP,x
+        lda FROM
+        sta UNDOFROM,x
+        lda TO
+        sta UNDOTO,x
+        lda MVFLAGS
+        sta UNDOFLAGS,x
+        ldy FROM
+        lda a:BOARD,y           ; force absolute: no lda zp,y mode exists
+        sta MVPIECE
+        sta UNDOPIECE,x
+
+        ; capture square: TO, or the pushed-past square for en passant
+        lda MVFLAGS
+        and #FL_EP
+        beq mknotep
+        lda MVPIECE
+        and #COLORMASK
+        bne mkepb
+        lda TO                  ; white captures: victim is below TO
+        sec
+        sbc #$10
+        jmp mkhavecap
+mkepb:  lda TO                  ; black captures: victim is above TO
+        clc
+        adc #$10
+        jmp mkhavecap
+mknotep:
+        lda TO
+mkhavecap:
+        sta UNDOCAPSQ,x
+        tay
+        lda a:BOARD,y           ; victim byte (0 if quiet move)
+        sta UNDOCAP,x
+        beq mknocap
+        ; remove victim: tombstone its list slot, clear its square
+        pha
+        lda #0
+        sta a:BOARD,y
+        pla
+        jsr slotof
+        lda #NOSQ
+        sta PIECESQ,y
+mknocap:
+        ; move the piece (promotion replaces the type bits)
+        ldy FROM
+        lda #0
+        sta a:BOARD,y
+        lda MVFLAGS
+        and #FL_PROMO
+        beq mknopromo
+        sta GTMP
+        lda MVPIECE
+        and #INDEXMASK|COLORMASK
+        ora GTMP
+        bne mkplace             ; always (piece byte nonzero)
+mknopromo:
+        lda MVPIECE
+mkplace:
+        ldy TO
+        sta a:BOARD,y
+        lda MVPIECE
+        jsr slotof
+        lda TO
+        sta PIECESQ,y
+
+        ; castling: also move the rook
+        lda MVFLAGS
+        and #FL_CASTLE
+        beq mknocastle
+        jsr castlerook
+mknocastle:
+        ; rights: CASTLE &= CASTLEMASK[FROM] & CASTLEMASK[TO]
+        ldy FROM
+        lda CASTLEMASK,y
+        ldy TO
+        and CASTLEMASK,y
+        and CASTLE
+        sta CASTLE
+        ; ep square: midpoint of a double push, else none
+        lda MVFLAGS
+        and #FL_DOUBLE
+        beq mknodouble
+        lda FROM
+        clc
+        adc TO                  ; never carries for double-push squares
+        lsr
+        sta EPSQ
+        jmp mkflip
+mknodouble:
+        lda #NOSQ
+        sta EPSQ
+mkflip: lda SIDE
+        eor #COLORMASK
+        sta SIDE
+        inc PLY
+        rts
+
+; ---------------------------------------------------------------
+; castlerook: move the rook for the castle move being made; TO tells
+; which corner. Uses GTMP/GTO as rook from/to. Clobbers A,Y.
+; ---------------------------------------------------------------
+castlerook:
+        lda TO
+        cmp #$06                ; g1
+        bne crnot1
+        lda #$07
+        sta GTMP
+        lda #$05
+        bne crgo                ; always
+crnot1: cmp #$02                ; c1
+        bne crnot2
+        lda #$00
+        sta GTMP
+        lda #$03
+        bne crgo
+crnot2: cmp #$76                ; g8
+        bne crnot3
+        lda #$77
+        sta GTMP
+        lda #$75
+        bne crgo
+crnot3: lda #$70                ; c8
+        sta GTMP
+        lda #$73
+crgo:   sta GTO
+        ldy GTMP                ; rook from
+        lda a:BOARD,y
+        sta CRTMP
+        lda #0
+        sta a:BOARD,y
+        ldy GTO
+        lda CRTMP
+        sta a:BOARD,y
+        jsr slotof              ; A = rook byte -> Y = slot
+        lda GTO
+        sta PIECESQ,y
+        rts
+
+; ---------------------------------------------------------------
+; uncastlerook: undo the rook move; UNDOTO,x (x=PLY) tells the corner.
+; ---------------------------------------------------------------
+uncastlerook:
+        lda UNDOTO,x
+        cmp #$06
+        bne ucnot1
+        lda #$05
+        sta GTMP
+        lda #$07
+        bne ucgo
+ucnot1: cmp #$02
+        bne ucnot2
+        lda #$03
+        sta GTMP
+        lda #$00                ; Z is set: must jmp, not branch-always
+        jmp ucgo
+ucnot2: cmp #$76
+        bne ucnot3
+        lda #$75
+        sta GTMP
+        lda #$77
+        bne ucgo
+ucnot3: lda #$73
+        sta GTMP
+        lda #$70
+ucgo:   sta GTO
+        ldy GTMP                ; rook currently here
+        lda a:BOARD,y
+        sta CRTMP
+        lda #0
+        sta a:BOARD,y
+        ldy GTO
+        lda CRTMP
+        sta a:BOARD,y
+        jsr slotof              ; A = rook byte -> Y = slot
+        lda GTO
+        sta PIECESQ,y
+        rts
+
+; ---------------------------------------------------------------
+; unmake: undo the move recorded at PLY-1. Restores side, castle, ep,
+; board, piece lists.
+; ---------------------------------------------------------------
+unmake:
+        dec PLY
+        ldx PLY
+        lda SIDE
+        eor #COLORMASK
+        sta SIDE
+        lda UNDOCASTLE,x
+        sta CASTLE
+        lda UNDOEP,x
+        sta EPSQ
+        ; clear TO, put the original piece byte back on FROM
+        ldy UNDOTO,x
+        lda #0
+        sta a:BOARD,y
+        lda UNDOPIECE,x
+        ldy UNDOFROM,x
+        sta a:BOARD,y
+        jsr slotof              ; Y = mover's slot
+        lda UNDOFROM,x
+        sta PIECESQ,y
+        ; castle: move the rook back
+        lda UNDOFLAGS,x
+        and #FL_CASTLE
+        beq umnocastle
+        jsr uncastlerook
+umnocastle:
+        ; restore any captured piece
+        lda UNDOCAP,x
+        beq umnocap
+        pha
+        ldy UNDOCAPSQ,x
+        sta a:BOARD,y
+        jsr slotof
+        lda UNDOCAPSQ,x
+        sta PIECESQ,y
+        pla
+umnocap:
+        rts
