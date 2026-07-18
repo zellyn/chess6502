@@ -72,12 +72,14 @@ idmode: lda #1
 idloop: jsr iterate
         lda ABORT
         beq idok
-        ; aborted mid-iteration: keep this iteration's best only if one
-        ; exists (a completed root move); else the previous iteration's
-        lda BESTFROM
-        cmp #NOSQ
-        bne report
+        ; aborted mid-iteration: a partial iteration's "best" is just the
+        ; first root move it happened to search (fail-hard alpha starts at
+        ; -INF), so prefer the last COMPLETED iteration's move whenever
+        ; one exists. (D9's improved-on-previous-score refinement needs
+        ; score bookkeeping; this is the safe subset.)
         lda PREVFROM
+        cmp #NOSQ
+        beq report              ; iteration 1 aborted: keep what we have
         sta BESTFROM
         lda PREVTO
         sta BESTTO
