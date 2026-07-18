@@ -8,7 +8,7 @@ Hand-drawn in DazzleDraw on the Apple II (well, an emulator) by zellyn.
   look).
 
 Preferred format: the raw DazzleDraw/hires save (the actual $2000-page
-byte layout, 8192 bytes, no conversion loss). A PNG export alongside is
+byte layout; chess-dazzledraw-save.bin is the 16K double-hires A2FC form: 8K aux bank then 8K main - decode with cmd/dhgr2png). A PNG export alongside is
 welcome for browsing on GitHub. The M8 display work will slice this
 into per-square tiles and pre-shifted piece sprites (pieces occupy 8
 fixed columns, so at most 8 bit-phases per sprite — generated at init,
