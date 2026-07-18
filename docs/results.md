@@ -3,6 +3,22 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — M5a: eval terms, dither, and the depth verdict
+
+- Pawn structure + king shield (FT_PSTRUCT) self-play A/B: +14 +/- 57
+  over 100 games at 30 emulated s/move — directionally positive,
+  unresolved at this sample size (accumulation continues).
+- TSCP-d3 rematch with dither: **0-18-2** (from 0-20). First draws, and
+  the games are finally distinct (per-move seeded eval dither, the
+  simulation of the hardware plan to seed from input timing).
+- **The decisive diagnostic**: the bridge now emits depth/score into
+  the PGNs — we search **depth 4** at 30 emulated s/move in the
+  middlegame. The remaining gap to TSCP-d3 is depth, not sanity.
+  Next lever: the open performance items (lazy legality ~15-20%,
+  move-loop restructure ~10-15%, make() fusion ~5-7%, give-check
+  propagation ~15-20%) — together roughly a node doubling, ~+1 ply,
+  compounding with ID/TT. Then re-measure.
+
 ## 2026-07-18 — post-fix measurements
 
 Feature gates, self-play at 30 emulated s/move, generated paired
