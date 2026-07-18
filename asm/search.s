@@ -805,23 +805,94 @@ slegal: ldy PLY                 ; PLY = child here
         clc
         adc #1
         sta LEGALCNT,y
-        iny
-        ; child window: ALPHA[c] = -BETA[p], BETA[c] = -ALPHA[p]
+        ; ---- child window mode (FT_LMR: PVS + late move reductions):
+        ; 0 = full window, 1 = zero-window scout, 2/3 = scout reduced
+        ; by 1/2. The first legal move always gets the full window;
+        ; reductions only for late quiets (pass 4), never in check,
+        ; never for checking moves, remaining >= 3.
+        ldx #0
+        lda FEATURES
+        and #FT_LMR
+        beq smset
+        lda QSKIND,y
+        bne smset               ; qs capture nodes: full window
+        lda LEGALCNT,y
+        cmp #2
+        bcc smset               ; first legal move: the PV move
+        ldx #1                  ; later moves: zero-window scout
+        cpy #0
+        beq smset               ; root moves: scout but never reduce
+        lda PASSNO,y
+        cmp #4
+        bne smset
+        lda INCHK,y
+        bne smset
+        lda INCHK+1,y
+        bne smset               ; the move gives check: don't reduce
+        lda LEGALCNT,y
+        cmp #4
+        bcc smset               ; late: >= 3 moves already searched
+        sty T2
+        lda MAXDEPTH
         sec
+        sbc T2                  ; remaining depth at this node
+        cmp #3
+        bcc smset               ; too shallow to reduce
+        ldx #2                  ; reduce by 1
+        cmp #5
+        bcc smset
+        lda LEGALCNT,y
+        cmp #7
+        bcc smset               ; very late (>= 6 searched) and deep:
+        ldx #3                  ;  reduce by 2
+smset:  txa
+        sta SMODE,y
+        iny
+ssearch:                        ; (re)search entry; Y = child ply
+        ; child window: BETA[c] = -ALPHA[p] always; ALPHA[c] is
+        ; -BETA[p] (full window) or BETA[c] - 1 (zero-window scout)
+        sec
+        lda #0
+        sbc ALPHALO-1,y
+        sta BETALO,y
+        sta T0
+        lda #0
+        sbc ALPHAHI-1,y
+        sta BETAHI,y
+        sta T1
+        lda SMODE-1,y
+        beq swfull
+        sec
+        lda T0
+        sbc #1
+        sta ALPHALO,y
+        lda T1
+        sbc #0
+        sta ALPHAHI,y
+        jmp swgo
+swfull: sec
         lda #0
         sbc BETALO-1,y
         sta ALPHALO,y
         lda #0
         sbc BETAHI-1,y
         sta ALPHAHI,y
+swgo:   lda SMODE-1,y
+        cmp #2
+        bcc snored
+        lda MAXDEPTH            ; reduced scout: shrink the horizon
+        pha                     ;  for the subtree by mode-1 plies
         sec
-        lda #0
-        sbc ALPHALO-1,y
-        sta BETALO,y
-        lda #0
-        sbc ALPHAHI-1,y
-        sta BETAHI,y
+        sbc SMODE-1,y
+        clc
+        adc #1
+        sta MAXDEPTH
         jsr search
+        pla
+        sta MAXDEPTH
+        jmp spostsr
+snored: jsr search
+spostsr:
         sec                     ; SCORE = -SCORE
         lda #0
         sbc SCORE
@@ -830,8 +901,64 @@ slegal: ldy PLY                 ; PLY = child here
         sbc SCORE+1
         sta SCORE+1
         jsr unmake
-        ; beta cutoff?
+        ; scout results: a fail-high zero-window score is not final
         ldy PLY
+        lda SMODE,y
+        beq scheckbc            ; full-window result: final
+        sec                     ; fail high iff SCORE > ALPHA (strict)
+        lda ALPHALO,y
+        sbc SCORE
+        lda ALPHAHI,y
+        sbc SCORE+1
+        bvc :+
+        eor #$80
+:       bpl scheckbc            ; ALPHA >= SCORE: scout failed low
+        lda SMODE,y
+        cmp #2
+        bcs sdemote1            ; reduced: retry unreduced, zero window
+        ; unreduced scout: full-window retry only if the window is
+        ; open (BETA - ALPHA >= 2); at a zero-window node the fail-
+        ; high result is final (the cutoff check below fires)
+        sec
+        lda BETALO,y
+        sbc ALPHALO,y
+        sta T0
+        lda BETAHI,y
+        sbc ALPHAHI,y
+        bne sdemote0            ; difference >= 256: open
+        lda T0
+        cmp #2
+        bcs sdemote0
+        bcc scheckbc            ; always (zero-window node)
+sdemote1:
+        lda #1
+        bne :+                  ; always
+sdemote0:
+        lda #0
+:       sta SMODE,y
+        ; refetch the move (cursor is 3 past it) and re-make it;
+        ; legality is already proven, no attacked() re-check
+        lda CURSORLO,y
+        sec
+        sbc #3
+        sta CURPTR
+        lda CURSORHI,y
+        sbc #0
+        sta CURPTR+1
+        ldy #0
+        lda (CURPTR),y
+        sta FROM
+        iny
+        lda (CURPTR),y
+        sta TO
+        iny
+        lda (CURPTR),y
+        sta MVFLAGS
+        jsr make
+        ldy PLY
+        jmp ssearch
+scheckbc:
+        ; beta cutoff?
         sec
         lda SCORE
         sbc BETALO,y

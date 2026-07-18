@@ -178,7 +178,7 @@ func NewMachine(bin []byte, defs Defs, pos *Position, depth byte, cout io.Writer
 	m.Mem.Main[defs["EPSQ"]] = pos.EpSq
 	m.Mem.Main[defs["CASTLE"]] = pos.Castle
 	m.Mem.Main[defs["ROOTDEPTH"]] = depth
-	m.Mem.Main[defs["FEATURES"]] = 0x0F // all search+eval features on
+	m.Mem.Main[defs["FEATURES"]] = 0x1F // all search+eval features on
 	return m, nil
 }
 

@@ -147,6 +147,7 @@ FT_NULL   = $01         ; null-move pruning (R=2)
 FT_KILLER = $02         ; killer-move ordering
 FT_FUTIL  = $04         ; futility + reverse-futility at depth <= 2
 FT_PSTRUCT = $08        ; pawn-structure + king-shield eval term
+FT_LMR    = $10         ; PVS zero-window scouts + late move reductions
 FT_CKVERIFY = $80       ; debug: verify make's gives-check against a
                         ; full scan at every node (exit 101 on mismatch)
 
@@ -210,6 +211,9 @@ DELTATL    = $0D60      ; qs delta-pruning threshold (16-bit): a capture
 DELTATH    = $0D80      ;  is searched only if its victim value >= this
 UNDOPSL    = $0DA0      ; PSTRUCT saved by make, restored by unmake
 UNDOPSH    = $0DC0
+SMODE      = $0DE0      ; child window mode for the move being searched:
+                        ;  0 full window, 1 zero-window scout (PVS),
+                        ;  2/3 scout reduced by 1/2 (LMR)
 
 MOVESTACK  = $0E00      ; 3 bytes/move (from,to,flags); through $1FFF
 MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this
