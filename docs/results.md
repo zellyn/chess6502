@@ -3,6 +3,28 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — deep-optimization batch: −15% cycles at identical trees
+
+Six items from the optimization review docs applied (taper right-shift
+multiply, SLOTTAB, emitmove filter removal, TT table-addr + unrolls,
+movepiece/takepiece fusion with kind-major Zobrist relayout, attacked()
+SMC rewrite). All behavior-identical — same trees, same scores, full
+suite green after every step. Depth-6 fixed-tree cycles:
+
+| features | before | after | delta |
+|----------|--------|-------|-------|
+| 0x00     | 7,604M | 6,480M | −14.8% |
+| 0x01     | 6,708M | 5,724M | −14.7% |
+| 0x07     | 4,404M | 3,742M | −15.0% |
+
+The uniform ratio across configs confirms the cuts are in the
+per-node constant factor, not tree shape. Cumulative since the perf
+campaign began: 0x00 8,575M → 6,480M (−24%), all-features 4,912M →
+3,742M (−24%). Still open from the review: two-ended emit
+(~200-600/node, needs node-count A/B), two-copy generate, pawnterm
+bitmask (lands with the Texel-tuned weights). Next depth lever: PVS/
+LMR (F4b restructure).
+
 ## 2026-07-18 — long battery: gates at 100 games, features-vs-budget verdict, first TSCP wins
 
 Full battery in tmux (runs/battery1.log), post give-check-propagation
