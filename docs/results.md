@@ -3,6 +3,35 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — PVS + LMR (FT_LMR): −87% depth-6 tree
+
+PVS zero-window scouts after the first legal move, with LMR on late
+quiets (depth−1 at >= 3 moves searched and remaining >= 3; depth−2 at
+>= 6 and remaining >= 5; never in check, never for checking moves,
+never at the root). Fail-high scouts re-search: reduced → unreduced
+zero-window → full window when open. Depth-6 fixed-tree cycles:
+
+| features | cycles |
+|----------|--------|
+| 0x00     | 6,509M |
+| 0x07     | 3,757M |
+| 0x0F     | 5,498M |
+| 0x1F     | **718M** |
+
+−87% vs 0x0F; masks without FT_LMR moved <1% (mode-select overhead
+only — gated-off behavior is bit-identical). Self-play 0x1F vs 0x0F,
+50 pairs at 30 emulated s: +37 =31 −32, **+17 ± 57 Elo** — positive,
+inside noise, as expected where the budget sits between depth
+thresholds; the tree cut is the durable win (roughly two extra plies
+at fixed cycles, EBF ~6.5 → the same budget now reaches depth 5-6
+where it reached 4). WAC stays 6/7 at depth 4 (b3b2 remains the
+historical miss); root reductions were tried and reverted — WAC.001's
+quiet mate move g3g6 was reduced into a fail-low at the root, which is
+why the root scouts but never reduces. Mate suite exact throughout
+(re-searches rescue reduced mates). Next: rematch TSCP-d3 at the new
+realized depth; tune reduction thresholds (the 3/6-move, R=1/2
+boundaries) in the Go mirror rather than 30-minute asm SPRTs.
+
 ## 2026-07-18 — deep-optimization batch: −15% cycles at identical trees
 
 Six items from the optimization review docs applied (taper right-shift
