@@ -47,11 +47,12 @@ func ParseDefs(path string) (Defs, error) {
 
 // Position is a chess position in the engine's encoding.
 type Position struct {
-	Board   [128]byte // 0x88; piece byte = index<<4 | color<<3 | type
-	PieceSq [32]byte  // slots 0-15 white (0=king), 16-31 black; $FF empty
-	Side    byte      // 0 white, 8 black
-	EpSq    byte      // 0x88 square or $FF
-	Castle  byte      // 1=WK 2=WQ 4=BK 8=BQ
+	Board    [128]byte // 0x88; piece byte = index<<4 | color<<3 | type
+	PieceSq  [32]byte  // slots 0-15 white (0=king), 16-31 black; $FF empty
+	Side     byte      // 0 white, 8 black
+	EpSq     byte      // 0x88 square or $FF
+	Castle   byte      // 1=WK 2=WQ 4=BK 8=BQ
+	Halfmove byte      // 50-move-rule clock
 }
 
 var pieceTypes = map[byte]byte{'p': 1, 'n': 2, 'b': 3, 'r': 4, 'q': 5, 'k': 6}
@@ -134,6 +135,12 @@ func ParseFEN(fen string) (*Position, error) {
 		}
 		pos.EpSq = byte(fields[3][1]-'1')<<4 | (fields[3][0] - 'a')
 	}
+	if len(fields) > 4 {
+		hm, err := strconv.Atoi(fields[4])
+		if err == nil && hm >= 0 && hm < 256 {
+			pos.Halfmove = byte(hm)
+		}
+	}
 	return pos, nil
 }
 
@@ -160,6 +167,50 @@ func NewMachine(bin []byte, defs Defs, pos *Position, depth byte, cout io.Writer
 	m.Mem.Main[defs["CASTLE"]] = pos.Castle
 	m.Mem.Main[defs["ROOTDEPTH"]] = depth
 	return m, nil
+}
+
+// SearchResult is the outcome of running the engine binary once.
+type SearchResult struct {
+	Move   string // UCI ("e2e4", "e7e8q"), or "" if no legal move
+	Score  int16  // from the side to move's POV
+	Cycles uint64
+}
+
+// SearchMove runs the engine binary over the position at fixed depth
+// MAXDEPTH and returns the chosen move and score.
+func SearchMove(bin []byte, defs Defs, pos *Position, depth byte, maxCycles uint64) (*SearchResult, error) {
+	var cout bytes.Buffer
+	m, err := NewMachine(bin, defs, pos, 0, &cout)
+	if err != nil {
+		return nil, err
+	}
+	m.Mem.Main[defs["MAXDEPTH"]] = depth
+	m.Mem.Main[defs["HALFMOVE"]] = pos.Halfmove
+
+	exited, code, err := m.Run(maxCycles)
+	if err != nil {
+		return nil, err
+	}
+	if !exited {
+		return nil, fmt.Errorf("cycle limit (%d) reached", maxCycles)
+	}
+	res := &SearchResult{
+		Score: int16(uint16(m.Mem.Main[defs["SCORE"]]) |
+			uint16(m.Mem.Main[defs["SCORE"]+1])<<8),
+		Cycles: m.Cycles,
+	}
+	switch code {
+	case 0:
+		out := strings.TrimSpace(cout.String())
+		if len(out) < 4 || len(out) > 5 {
+			return nil, fmt.Errorf("engine printed %q", out)
+		}
+		res.Move = out
+	case 2: // no legal move: mate or stalemate
+	default:
+		return nil, fmt.Errorf("engine exited with code %d (cout %q)", code, cout.String())
+	}
+	return res, nil
 }
 
 // Perft runs the perft binary over the position at the given depth and

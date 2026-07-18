@@ -100,6 +100,7 @@ func main() {
 	emitInts(&b, "KINGOFF", kingOffs)
 	emitInts(&b, "DIAGOFF", diagOffs)
 	emitInts(&b, "ORTHOOFF", orthoOffs)
+	emitPSQT(&b)
 
 	if err := os.WriteFile("asm/tables.s", []byte(b.String()), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -119,6 +120,58 @@ func emit(b *strings.Builder, name string, data []byte) {
 		}
 		b.WriteString("\n")
 	}
+}
+
+// emitPSQT writes the tapered piece-square tables in the engine's layout:
+// for piece type t (1-6), a 512-byte block at PSQTBASE+(t-1)*512 holding
+// MGLO[sq88] at +0, MGHI at +128, EGLO at +256, EGHI at +384. Values are
+// white-POV with piece base values baked in; black uses sq^$70 and
+// subtracts. TYPEPAGE0/1 give each type's table page for (zp),y access;
+// they are emitted as link-time expressions on PSQTBASE.
+func emitPSQT(b *strings.Builder) {
+	b.WriteString("\n.align 256\nPSQTBASE:\n")
+	for t := range 6 {
+		var mglo, mghi, eglo, eghi [128]byte
+		for sq := range 128 {
+			if sq&0x88 != 0 {
+				continue
+			}
+			rank := sq >> 4
+			file := sq & 7
+			idx := (7-rank)*8 + file // PeSTO tables are a8-first
+			mg := pestoPieceMG[t] + pestoMG[t][idx]
+			eg := pestoPieceEG[t] + pestoEG[t][idx]
+			mglo[sq] = byte(mg & 0xFF)
+			mghi[sq] = byte(mg >> 8 & 0xFF)
+			eglo[sq] = byte(eg & 0xFF)
+			eghi[sq] = byte(eg >> 8 & 0xFF)
+		}
+		names := []string{"PAWN", "KNIGHT", "BISHOP", "ROOK", "QUEEN", "KING"}
+		emit(b, fmt.Sprintf("PSQT_%s_MGLO", names[t]), mglo[:])
+		emit(b, fmt.Sprintf("PSQT_%s_MGHI", names[t]), mghi[:])
+		emit(b, fmt.Sprintf("PSQT_%s_EGLO", names[t]), eglo[:])
+		emit(b, fmt.Sprintf("PSQT_%s_EGHI", names[t]), eghi[:])
+	}
+	// Table page pointers, indexed by piece type 1-6 (0 and 7 unused).
+	b.WriteString("\nTYPEPAGE0:\n        .byte 0")
+	for t := range 6 {
+		fmt.Fprintf(b, ", >PSQTBASE+%d", t*2)
+	}
+	b.WriteString(", 0\nTYPEPAGE1:\n        .byte 0")
+	for t := range 6 {
+		fmt.Fprintf(b, ", >PSQTBASE+%d", t*2+1)
+	}
+	b.WriteString(", 0\n")
+	// Phase contribution per piece type, and phase -> /32 taper weight.
+	b.WriteString("PHASEVAL:\n        .byte 0,0,1,1,2,4,0,0\n")
+	b.WriteString("PHASEW:\n        .byte ")
+	for p := 0; p <= 24; p++ {
+		if p > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(b, "%d", (p*32+12)/24)
+	}
+	b.WriteString("\n")
 }
 
 func emitInts(b *strings.Builder, name string, offs []int) {

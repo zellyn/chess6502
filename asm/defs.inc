@@ -75,6 +75,36 @@ CRTMP     = $29         ; castle helpers: rook piece byte
 
 BOARD     = $40         ; 128-byte 0x88 board, $40..$BF
 
+; ---- Search/eval zero page ($C0-$FF) ----
+SCORE     = $C0         ; 16-bit: search/eval return value
+MGSCORE   = $C2         ; 16-bit signed: middlegame accumulator, white POV
+EGSCORE   = $C4         ; 16-bit signed: endgame accumulator, white POV
+PHASE     = $C6         ; game phase 0..24+ (N/B=1 R=2 Q=4, both sides)
+HALFMOVE  = $C7         ; 50-move-rule halfmove clock
+BESTFROM  = $C8         ; root best move
+BESTTO    = $C9
+BESTFLAGS = $CA
+T0        = $CB         ; 16-bit scratch (scmp16 left operand)
+T1        = $CC
+T2        = $CD         ; 16-bit scratch (scmp16 right operand)
+T3        = $CE
+MUL0      = $CF         ; 24-bit multiply accumulator
+MUL1      = $D0
+MUL2      = $D1
+PSP0      = $D2         ; 16-bit: PSQT mg table pointer
+PSP1      = $D4         ; 16-bit: PSQT eg table pointer
+INCHECK   = $D6         ; nonzero: side to move is in check (qs nodes)
+EVTMP     = $D7         ; eval scratch
+PSQSQ     = $D8         ; psqt: square (possibly rank-flipped)
+PSQPIECE  = $D9         ; psqt: piece byte
+MULCNT    = $DA         ; multiply loop counter
+MAXDEPTH  = $DB         ; full-width search depth; qs beyond (poked by rig)
+GENCAPS   = $DC         ; movegen: nonzero = emit captures/ep/promos only
+
+INF       = 32000
+MATE      = 30000
+TEMPO     = 10          ; side-to-move eval bonus, centipawns
+
 ; ---- Absolute data ----
 PIECESQ    = $0800      ; 32 bytes: slots 0-15 white (0=king), 16-31 black
 PLYBASELO  = $0820      ; per-ply move-stack base pointer
@@ -93,8 +123,23 @@ UNDOFROM   = $0980
 UNDOTO     = $09A0
 UNDOFLAGS  = $09C0
 
-MOVESTACK  = $0A00      ; 3 bytes/move (from,to,flags); through $17FF
-MOVESTACKTOP = $1800    ; exclusive end; generator overflow-checks this
+; Search per-ply state (32 entries each)
+ALPHALO    = $09E0
+ALPHAHI    = $0A00
+BETALO     = $0A20
+BETAHI     = $0A40
+UNDOMGLO   = $0A60      ; eval accumulators saved by make
+UNDOMGHI   = $0A80
+UNDOEGLO   = $0AA0
+UNDOEGHI   = $0AC0
+UNDOPHASE  = $0AE0
+UNDOHALF   = $0B00
+LEGALCNT   = $0B20      ; legal moves found at this ply
+PASSNO     = $0B40      ; move-loop pass: 0 captures/promos, 1 quiets
+QSKIND     = $0B60      ; 0 = full-width (or evasion) node, 1 = qs captures-only
+
+MOVESTACK  = $0C00      ; 3 bytes/move (from,to,flags); through $1FFF
+MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this
 
 ; ---- Harness I/O (plain RAM on real hardware; see docs/testing.md) ----
 COUT_TRAP = $BFF0

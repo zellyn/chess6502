@@ -111,6 +111,20 @@ make:
         sta UNDOTO,x
         lda MVFLAGS
         sta UNDOFLAGS,x
+.ifndef NOEVAL
+        lda MGSCORE
+        sta UNDOMGLO,x
+        lda MGSCORE+1
+        sta UNDOMGHI,x
+        lda EGSCORE
+        sta UNDOEGLO,x
+        lda EGSCORE+1
+        sta UNDOEGHI,x
+        lda PHASE
+        sta UNDOPHASE,x
+        lda HALFMOVE
+        sta UNDOHALF,x
+.endif
         ldy FROM
         lda a:BOARD,y           ; force absolute: no lda zp,y mode exists
         sta MVPIECE
@@ -139,8 +153,13 @@ mkhavecap:
         lda a:BOARD,y           ; victim byte (0 if quiet move)
         sta UNDOCAP,x
         beq mknocap
-        ; remove victim: tombstone its list slot, clear its square
+        ; remove victim: eval out, clear square, tombstone list slot
         pha
+.ifndef NOEVAL
+        jsr rempiece            ; A = victim, Y = capture square
+        ldx PLY
+.endif
+        ldy UNDOCAPSQ,x
         lda #0
         sta a:BOARD,y
         pla
@@ -148,6 +167,26 @@ mkhavecap:
         lda #NOSQ
         sta PIECESQ,y
 mknocap:
+.ifndef NOEVAL
+        ; 50-move clock: reset on capture or pawn move
+        ldx PLY
+        lda UNDOCAP,x
+        bne mkhmzero
+        lda MVPIECE
+        and #TYPEMASK
+        cmp #PAWN
+        beq mkhmzero
+        inc HALFMOVE
+        jmp mkhmdone
+mkhmzero:
+        lda #0
+        sta HALFMOVE
+mkhmdone:
+        ; eval: remove the mover from its origin
+        lda MVPIECE
+        ldy FROM
+        jsr rempiece
+.endif
         ; move the piece (promotion replaces the type bits)
         ldy FROM
         lda #0
@@ -163,9 +202,15 @@ mknocap:
 mknopromo:
         lda MVPIECE
 mkplace:
+        sta CRTMP               ; final piece byte (post-promotion)
         ldy TO
         sta a:BOARD,y
-        lda MVPIECE
+.ifndef NOEVAL
+        lda CRTMP
+        ldy TO
+        jsr addpiece
+.endif
+        lda CRTMP
         jsr slotof
         lda TO
         sta PIECESQ,y
@@ -233,11 +278,19 @@ crgo:   sta GTO
         ldy GTMP                ; rook from
         lda a:BOARD,y
         sta CRTMP
+.ifndef NOEVAL
+        jsr rempiece            ; A = rook byte, Y = from square
+        lda CRTMP
+        ldy GTO
+        jsr addpiece
+.endif
+        ldy GTMP
         lda #0
         sta a:BOARD,y
         ldy GTO
         lda CRTMP
         sta a:BOARD,y
+        lda CRTMP
         jsr slotof              ; A = rook byte -> Y = slot
         lda GTO
         sta PIECESQ,y
@@ -297,6 +350,20 @@ unmake:
         sta CASTLE
         lda UNDOEP,x
         sta EPSQ
+.ifndef NOEVAL
+        lda UNDOMGLO,x
+        sta MGSCORE
+        lda UNDOMGHI,x
+        sta MGSCORE+1
+        lda UNDOEGLO,x
+        sta EGSCORE
+        lda UNDOEGHI,x
+        sta EGSCORE+1
+        lda UNDOPHASE,x
+        sta PHASE
+        lda UNDOHALF,x
+        sta HALFMOVE
+.endif
         ; clear TO, put the original piece byte back on FROM
         ldy UNDOTO,x
         lda #0

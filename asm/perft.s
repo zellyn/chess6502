@@ -3,6 +3,7 @@
 ; runs this binary. It prints the 32-bit leaf count as 8 hex digits + LF
 ; via the COUT trap, leaves it in PCOUNT, and exits 0.
 
+NOEVAL = 1
         .include "defs.inc"
 
         .segment "CODE"

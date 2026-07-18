@@ -5,9 +5,20 @@
 
 ; ---------------------------------------------------------------
 ; emitmove: A = flags; GFROM/GTO = squares. Advances MSP.
+; With GENCAPS set, quiet moves are dropped (quiescence generation).
 ; ---------------------------------------------------------------
 emitmove:
-        ldy #2
+        ldx GENCAPS
+        beq emgo
+        sta DIFF                ; scratch; attacked() is not active here
+        and #FL_EP|FL_PROMO
+        bne emkeep              ; ep/promotion: keep
+        ldx GTO
+        lda BOARD,x
+        bne emkeep              ; capture: keep
+        rts                     ; quiet: drop
+emkeep: lda DIFF
+emgo:   ldy #2
         sta (MSP),y
         dey
         lda GTO
