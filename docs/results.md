@@ -105,14 +105,13 @@ Analysis (verified, not guessed):
   partial "best move" (fail-hard: the first root move always raises
   alpha from -INF) was preferred over the last completed iteration's
   move; with the root TT entry evicted this returned near-arbitrary
+  moves, degrading play as the game went on.
 
-## 2026-07-18 — perf batch 1 (lazy legality, attacked() micro, hashstm unroll)
+This is the recorded pre-pruning baseline. M4 (null move R=2, killers,
+futility/RFP) attacks the EBF directly; the plan's model expects those
+to buy 2-4 effective plies at the same budget.
 
-Depth-6 fixed-tree cycles: baseline 8,575M -> 8,243M; all features
-4,912M -> 4,727M (~4% each). Well under the review's 15-20% model for
-lazy legality — that model predated the QS surgery, which had already
-removed most per-node legality work. Full suite green throughout
-(perft exact; legality torture is the gate that would catch an
-over-eager skip). Next ply must come from the structural items:
-give-check propagation (kills the second full attacked() scan per
-node) and the move-loop restructure.
+Also measured this cycle:
+- ID + TT vs cold fixed-depth: WAC.001 to depth 4 in 706M cycles vs
+  2,473M (3.5x, including depths 1-3). Suite: 1,537M vs 3,715M.
+- WAC subset: 6/7 at depth 4 (both modes).
