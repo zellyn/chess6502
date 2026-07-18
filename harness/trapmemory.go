@@ -61,31 +61,29 @@ func (t *TrapMemory) Write(addr uint16, val byte) {
 // Read implements cpu.Memory, applying the read traps (main-bank reads
 // only) before delegating to the underlying iie.Memory.
 func (t *TrapMemory) Read(addr uint16) byte {
-	if !t.Memory.RamRd && t.InAddr != 0 {
-		switch addr {
-		case t.InAddr:
+	if !t.Memory.RamRd {
+		switch {
+		case t.InAddr != 0 && addr == t.InAddr:
 			if len(t.Input) == 0 {
 				return 0
 			}
 			b := t.Input[0]
 			t.Input = t.Input[1:]
 			return b
-		case t.InStatusAddr:
+		case t.InStatusAddr != 0 && addr == t.InStatusAddr:
 			if len(t.Input) == 0 {
 				t.waitingInput = true
 				return 0
 			}
 			return 0x80
-		case t.ClockAddr:
+		case t.ClockAddr != 0 && addr == t.ClockAddr:
 			if t.Memory.Clock != nil {
 				c := t.Memory.Clock() >> 8
 				t.clockLatch = [3]byte{byte(c), byte(c >> 8), byte(c >> 16)}
 			}
 			return t.clockLatch[0]
-		case t.ClockAddr + 1:
-			return t.clockLatch[1]
-		case t.ClockAddr + 2:
-			return t.clockLatch[2]
+		case t.ClockAddr != 0 && (addr == t.ClockAddr+1 || addr == t.ClockAddr+2):
+			return t.clockLatch[addr-t.ClockAddr]
 		}
 	}
 	return t.Memory.Read(addr)

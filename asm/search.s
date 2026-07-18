@@ -53,6 +53,9 @@ checkclock:
         ora BUDGET1
         ora BUDGET2
         beq ccout
+        lda CURDEPTH            ; iteration 1 always completes, so an
+        cmp #2                  ; abort can never leave a garbage move
+        bcc ccout
         lda CLOCK_TRAP          ; latches all three bytes
         cmp ABORTL0
         lda CLOCK_TRAP+1
@@ -155,6 +158,9 @@ sdrawend:
         sta RAISED,y
         sta INCHK,y
         sta FUTILE,y
+        sta DELTATL,y
+        lda #$80                ; delta threshold -32768: no delta pruning
+        sta DELTATH,y           ; (qs stand-pat raises it when applicable)
         lda #NOSQ
         sta TTFROMA,y
         sta TTBF,y
@@ -189,16 +195,16 @@ ttcut:  lda TTENTRY+7
         beq ttexact
         cmp #TT_LOWER
         beq ttlower
-        ; upper bound: usable if score <= alpha
+        ; upper bound: usable if score <= alpha, i.e. alpha - score >= 0
         sec
-        lda TTENTRY+5
-        sbc ALPHALO,y
-        lda TTENTRY+6
-        sbc ALPHAHI,y
+        lda ALPHALO,y
+        sbc TTENTRY+5
+        lda ALPHAHI,y
+        sbc TTENTRY+6
         bvc :+
         eor #$80
-:       bpl snodej              ; score > alpha: not usable
-        lda ALPHALO,y
+:       bmi snodej              ; alpha < score: not usable
+        lda ALPHALO,y           ; fail-hard low
         sta SCORE
         lda ALPHAHI,y
         sta SCORE+1
@@ -260,11 +266,33 @@ qsnofh: ; if SCORE > ALPHA: ALPHA = SCORE
         bvc :+
         eor #$80
 :       bmi :+
-        jmp snode               ; no improvement
+        jmp qsdelta             ; no improvement
 :       lda SCORE
         sta ALPHALO,y
         lda SCORE+1
         sta ALPHAHI,y
+qsdelta:
+        ; delta pruning threshold: search a capture only if its victim
+        ; is worth at least alpha - standpat - margin. Disabled at low
+        ; phase, where every pawn matters.
+        lda PHASE
+        cmp #6
+        bcc qsnodelta
+        sec
+        lda ALPHALO,y
+        sbc SCORE               ; SCORE still holds the stand-pat eval
+        sta DELTATL,y
+        lda ALPHAHI,y
+        sbc SCORE+1
+        sta DELTATH,y
+        sec
+        lda DELTATL,y
+        sbc #<200               ; margin
+        sta DELTATL,y
+        lda DELTATH,y
+        sbc #>200
+        sta DELTATH,y
+qsnodelta:
         jmp snode               ; qs nodes skip sprep (no null/futility)
 
 ; ---------------------------------------------------------------
@@ -278,15 +306,16 @@ sprep:  ldy PLY
         sta INCHK,y
         beq :+
         jmp snode               ; in check: no null, no RFP, no futility
-:       ; ---- null move: FT_NULL, not right after a null, remaining
-        ; >= 2, phase >= 3, beta below the mate zone
+:       ; ---- null move: FT_NULL, not at the root, not right after a
+        ; null, remaining >= 2, phase >= 3, beta below the +mate zone
         lda FEATURES
         and #FT_NULL
         bne :+
         jmp snonull
 :       lda PLY
-        beq :+
-        tax
+        bne :+
+        jmp snonull             ; root must produce a move, never a null cutoff
+:       tax
         lda UNDOFROM-1,x        ; NOSQ marks the parent move as a null
         cmp #NOSQ
         bne :+
@@ -294,15 +323,30 @@ sprep:  ldy PLY
 :       lda MAXDEPTH
         sec
         sbc PLY
-        cmp #2
-        bcc snonull
+        cmp #4                  ; with R=2, a shallower null child is a
+        bcc snonullj            ; bare QS sweep: all cost, no cut value
         lda PHASE
         cmp #3
-        bcc snonull
+        bcc snonullj
         lda BETAHI,y
-        cmp #$74
-        bcs snonull
-        jsr makenull
+        bmi :+                  ; negative beta: nowhere near the +mate zone
+        cmp #MATEZONEHI         ; (signed-aware zone test; an unsigned compare
+        bcs snonullj            ;  here silently disabled null move — see
+:       ; only worth trying when the static eval already meets beta:
+        ; failed nulls are pure cost
+        jsr eval
+        ldy PLY
+        sec
+        lda SCORE
+        sbc BETALO,y
+        lda SCORE+1
+        sbc BETAHI,y
+        bvc :+
+        eor #$80
+:       bpl :+
+snonullj:
+        jmp snonull             ; eval < beta: don't bother
+:       jsr makenull            ;
         ldy PLY                 ; child ply: zero window around -beta
         sec
         lda #0
@@ -346,16 +390,41 @@ sprep:  ldy PLY
         bvc :+
         eor #$80
 :       bmi snonull             ; below beta: search normally
+nullcut:
         lda BETALO,y            ; null cutoff: fail hard
         sta SCORE
         lda BETAHI,y
         sta SCORE+1
+        ; store a moveless lower bound so re-visits get the cutoff free
+        lda #NOSQ
+        sta TTENTRY+3
+        sta TTENTRY+4
+        lda SCORE
+        sta TTENTRY+5
+        lda SCORE+1
+        sta TTENTRY+6
+        lda #TT_LOWER
+        jsr ttstore
         rts
 snonull:
-        ; ---- RFP + futility: FT_FUTIL, remaining <= 2
+        ; ---- RFP + futility: FT_FUTIL, remaining <= 2, and the window
+        ; not inside a mate zone (static eval can't speak to mates)
         lda FEATURES
         and #FT_FUTIL
-        beq sprepj
+        bne :+
+        jmp sprepj
+:       lda ALPHAHI,y
+        bpl :+
+        cmp #NMATEZONEHI
+        bcc sprepj              ; alpha in the losing-mate zone
+:       cmp #MATEZONEHI
+        bcs sprepj              ; alpha in the winning-mate zone
+        lda BETAHI,y
+        bpl :+
+        cmp #NMATEZONEHI
+        bcc sprepj              ; beta in the losing-mate zone
+:       cmp #MATEZONEHI
+        bcs sprepj              ; beta in the winning-mate zone
         lda MAXDEPTH
         sec
         sbc PLY
@@ -490,16 +559,21 @@ sloop:  ldy PLY
         lda CURSORHI,y
         cmp PLYENDHI,y
         bne sfetch
-        ; end of list: 0 (TT move) -> 1 (captures) -> 2 (killers) ->
-        ; 3 (quiets) -> done; qs and futility-pruned nodes stop after 1
+        ; end of list: 0 (TT move) -> 1 (heavy captures: promotions and
+        ; victims >= rook) -> 2 (light captures) -> 3 (killers) ->
+        ; 4 (quiets) -> done; qs and futility nodes stop after pass 2
         lda PASSNO,y
-        cmp #3
+        cmp #4
         bcc :+
         jmp sdone
-:       cmp #1
-        bcc spass1              ; pass 0 done -> captures
-        bne spass3              ; pass 2 done -> rest of quiets
-        lda QSKIND,y            ; pass 1 done:
+:       cmp #0
+        beq spass1
+        cmp #1
+        beq spass2
+        cmp #3
+        beq spass4
+        ; pass 2 (light captures) finished
+        lda QSKIND,y
         beq :+
         jmp sdone               ; qs: captures only
 :       lda FUTILE,y
@@ -507,8 +581,8 @@ sloop:  ldy PLY
         jmp sdone               ; futility: quiets can't raise alpha
 :       lda FEATURES
         and #FT_KILLER
-        bne spass2
-        beq spass3              ; killers off: skip their pass
+        bne spass3
+        beq spass4              ; killers off: skip their pass
 spass1: lda #1
         sta PASSNO,y
         bne spassgo             ; always
@@ -516,6 +590,9 @@ spass2: lda #2
         sta PASSNO,y
         bne spassgo             ; always
 spass3: lda #3
+        sta PASSNO,y
+        bne spassgo             ; always
+spass4: lda #4
         sta PASSNO,y
 spassgo:
         lda PLYBASELO,y
@@ -568,8 +645,8 @@ snotp0: ldx TTFROMA,y
         bne snotttm
         jmp sloop               ; the TT move: already searched in pass 0
 snotttm:
-        ; captures/promotions in pass 1; quiets in pass 2 (killers) and
-        ; pass 3 (the rest)
+        ; heavy captures in pass 1, light in pass 2, killer quiets in
+        ; pass 3, remaining quiets in pass 4
         ldx TO
         lda BOARD,x
         bne siscap
@@ -577,11 +654,11 @@ snotttm:
         and #FL_EP|FL_PROMO
         bne siscap
         lda PASSNO,y
-        cmp #2
-        beq squietk
         cmp #3
+        beq squietk
+        cmp #4
         beq squietr
-        jmp sloop               ; passes 0/1: no quiets
+        jmp sloop               ; capture passes: no quiets
 squietk:                        ; killer pass: only killer matches
         lda KILLER1F,y
         cmp FROM
@@ -616,17 +693,56 @@ skskip: jmp sloop
 sdomovej:
         jmp sdomove
 siscap: lda PASSNO,y
-        cmp #2
+        cmp #3
         bcc :+
-        jmp sloop               ; captures were pass 1
-:       ; qs nodes: queen promotions only
-        lda QSKIND,y
-        beq sdomove
+        jmp sloop               ; captures were passes 1/2
+:       ; promotions: always heavy; qs nodes take queen promos only
         lda MVFLAGS
         and #FL_PROMO
-        beq sdomove
+        beq scapvic
+        lda PASSNO,y
+        cmp #1
+        beq :+
+        jmp sloop               ; promos belong to the heavy pass
+:       lda QSKIND,y
+        beq sdomovej
+        lda MVFLAGS
+        and #FL_PROMO
         cmp #QUEEN
-        bne skskip
+        beq sdomovej
+        jmp sloop
+scapvic:
+        ; victim type: ep captures take a pawn
+        lda MVFLAGS
+        and #FL_EP
+        beq :+
+        ldx #PAWN
+        bne scaptier            ; always
+:       ldx TO
+        lda BOARD,x
+        and #TYPEMASK
+        tax
+scaptier:
+        ; tier: victims >= rook are heavy (pass 1), others light (pass 2)
+        lda PASSNO,y
+        cpx #ROOK
+        bcs :+
+        cmp #2                  ; light capture: pass 2 only
+        beq sdelta
+        jmp sloop
+:       cmp #1                  ; heavy capture: pass 1 only
+        beq sdelta
+        jmp sloop
+sdelta: ; delta pruning: skip if the victim can't lift standpat to alpha
+        sec
+        lda VICVALL,x
+        sbc DELTATL,y
+        lda VICVALH,x
+        sbc DELTATH,y
+        bvc :+
+        eor #$80
+:       bpl sdomove             ; victim value >= threshold: search it
+        jmp sloop
 sdomove:
         jsr make
         ; legality: mover must not leave their king attacked
@@ -821,6 +937,13 @@ spop:   ldy PLY
         lda PLYBASEHI,y
         sta MSP+1
         rts
+
+; Victim values for delta pruning, by piece type. A pseudo-legal king
+; "capture" must always be searched, hence the huge value.
+VICVALL:
+        .byte 0, <100, <320, <330, <500, <975, <20000, 0
+VICVALH:
+        .byte 0, >100, >320, >330, >500, >975, >20000, 0
 
 ; setmove3: TTENTRY+3/4 = the from/to of the move at cursor[PLY] - 3
 ; (the move just searched; the cursor advances before make).

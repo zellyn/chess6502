@@ -266,12 +266,8 @@ func playGame(cfg Config, opening []string, aWhite bool) (int, error) {
 			return 0, err
 		}
 		chesstest.SetFeatures(m, cfg.Defs, features)
-		m.Mem.Main[cfg.Defs["MAXDEPTH"]] = 24
+		chesstest.SetBudget(m, cfg.Defs, cfg.BudgetCycles, 24)
 		m.Mem.Main[cfg.Defs["HALFMOVE"]] = byte(min(ref.HalfmoveClock(), 255))
-		bu := cfg.BudgetCycles >> 8
-		m.Mem.Main[cfg.Defs["BUDGET0"]] = byte(bu)
-		m.Mem.Main[cfg.Defs["BUDGET1"]] = byte(bu >> 8)
-		m.Mem.Main[cfg.Defs["BUDGET2"]] = byte(bu >> 16)
 		if aux := auxes[aTurn]; aux != nil {
 			copy(m.Mem.Aux[:], aux)
 		}

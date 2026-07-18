@@ -122,9 +122,11 @@ gswalk: clc
         jsr emitmove            ; capture: emit, then stop
         jmp gsnextdir
 gsempty:
+        lda GENCAPS
+        bne :+                  ; qs: don't emit (or call for) quiets
         lda #0
         jsr emitmove
-        lda GTO
+:       lda GTO
         jmp gswalk
 gsnextdir:
         inc GDIR
@@ -158,11 +160,16 @@ gstloop:
         bne gstnext
         ldx GTO
         lda BOARD,x
-        beq gstemit
+        beq gstquiet
         eor SIDE
         and #COLORMASK
         beq gstnext             ; own piece
-gstemit:
+        lda #0
+        jsr emitmove
+        jmp gstnext
+gstquiet:
+        lda GENCAPS
+        bne gstnext             ; qs: skip quiet steps
         lda #0
         jsr emitmove
 gstnext:
@@ -170,12 +177,14 @@ gstnext:
         lda GDIR
         cmp #8
         bne gstloop
-        ; kings also try castling
+        ; kings also try castling (quiet: skipped in qs generation)
+        lda GENCAPS
+        bne :+
         lda GPIECE
         and #TYPEMASK
         cmp #KING
         beq gencastle
-        jmp gennext
+:       jmp gennext
 
 ; ---- castling ----
 ; Emits if: rights bit set, between-squares empty, king square and the
@@ -309,6 +318,8 @@ genpawn:
         and #$F0
         cmp #$60
         beq gwpromopush
+        lda GENCAPS
+        bne gwcaps              ; qs: pawn pushes are quiet
         lda #0
         jsr emitmove
         ; double push from rank 2
@@ -375,6 +386,8 @@ genbpawn:
         and #$F0
         cmp #$10
         beq gbpromopush
+        lda GENCAPS
+        bne gbcaps              ; qs: pawn pushes are quiet
         lda #0
         jsr emitmove
         ; double push from rank 7

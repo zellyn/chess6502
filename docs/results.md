@@ -3,6 +3,39 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — M4 debugging night: the pruning stack made real
+
+Fixed-depth tree size on the reference middlegame position (cycles to
+complete the search; the honest metric after learning that budget-mode
+soft-stops invalidate comparisons):
+
+| Features | Depth 6 cycles | vs baseline |
+|---|---|---|
+| none | 8,575M | — |
+| null move | 7,498M | −13% |
+| null + killers + futility | 4,912M | −43% |
+
+What it took to get there (full detail in
+docs/reviews/2026-07-18-code-review.md):
+1. Adversarial review found null move disabled by an unsigned compare
+   on the beta high byte (negative betas always read as "mate zone").
+2. Fixing that made trees BIGGER (+73%): single-step instrumentation
+   showed the search was QS-dominated (capture chains to ply 30,
+   captures in piece-list order, delta pruning documented but never
+   implemented). Fixed: two-tier MVV capture passes, per-ply delta
+   threshold, capture-only qs generation.
+3. Still bigger with null: shallow nulls (remaining 2-3) reduce to bare
+   QS sweeps that start fail-low (with the eval>=beta gate, the null
+   child's stand-pat can never cut) — all cost, no value when ordering
+   already cuts on the first real move. Floor raised to remaining >= 4;
+   null cutoffs now also store TT lower bounds, and attempts are gated
+   on static eval >= beta.
+
+Also: TT upper-bound cutoffs missed score==alpha (fixed; the baseline
+itself dropped ~40% from this), eval got w=32/w=0 taper fast paths,
+futility/RFP gained mate-zone window guards, iteration 1 is now
+abort-immune.
+
 ## 2026-07-18 — M3 complete: first calibration matches
 
 Engine: ID + aux TT + UCI bridge, 30 emulated s/move (~30.6M cycles).

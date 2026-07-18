@@ -41,6 +41,11 @@ CR_BQ = $08
 NOSQ   = $FF            ; "no square": ep-none, tombstoned piece slot
 MAXPLY = 32
 
+; Mate-zone tests on a score's HIGH byte (see MATE below): winning mates
+; live in $74xx+ (>= +29696), losing mates in $80xx-$8Bxx (<= -29696).
+MATEZONEHI  = $74
+NMATEZONEHI = $8C       ; exclusive: hi < $8C && hi >= $80 is a losing mate
+
 ; ---- Zero page ----
 SIDE      = $00         ; side to move: 0 = white, COLORMASK = black
 EPSQ      = $01         ; 0x88 square behind a double push, or NOSQ
@@ -93,7 +98,6 @@ MUL1      = $D0
 MUL2      = $D1
 PSP0      = $D2         ; 16-bit: PSQT mg table pointer
 PSP1      = $D4         ; 16-bit: PSQT eg table pointer
-INCHECK   = $D6         ; nonzero: side to move is in check (qs nodes)
 EVTMP     = $D7         ; eval scratch
 PSQSQ     = $D8         ; psqt: square (possibly rank-flipped)
 PSQPIECE  = $D9         ; psqt: piece byte
@@ -186,6 +190,8 @@ KILLER2F   = $0CE0
 KILLER2T   = $0D00
 INCHK      = $0D20      ; nonzero: side to move in check at this ply
 FUTILE     = $0D40      ; nonzero: prune quiets at this ply (futility)
+DELTATL    = $0D60      ; qs delta-pruning threshold (16-bit): a capture
+DELTATH    = $0D80      ;  is searched only if its victim value >= this
 
 MOVESTACK  = $0E00      ; 3 bytes/move (from,to,flags); through $1FFF
 MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this

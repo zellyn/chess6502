@@ -48,7 +48,7 @@ ldloop: lda (ZPTR),y
         ; depth cap; MAXDEPTH becomes the per-iteration depth
         lda MAXDEPTH
         sta MAXCAP
-        ; hard-abort limit = 2x budget
+        ; hard-abort limit = 2x budget, saturating at 24 bits
         lda BUDGET0
         asl
         sta ABORTL0
@@ -58,6 +58,12 @@ ldloop: lda (ZPTR),y
         lda BUDGET2
         rol
         sta ABORTL2
+        bcc :+
+        lda #$FF
+        sta ABORTL0
+        sta ABORTL1
+        sta ABORTL2
+:
         ; fixed-depth mode (budget 0): one iteration at the cap
         lda BUDGET0
         ora BUDGET1

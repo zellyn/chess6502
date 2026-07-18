@@ -179,6 +179,20 @@ func SetFeatures(m *harness.Machine, defs Defs, bits byte) {
 	m.Mem.Main[defs["FEATURES"]] = bits
 }
 
+// SetBudget pokes the engine's soft time budget (in cycles, converted
+// to its 24-bit 256-cycle units, rounding up so a tiny nonzero budget
+// never degrades to fixed-depth mode) and the depth cap.
+func SetBudget(m *harness.Machine, defs Defs, budgetCycles uint64, maxDepth byte) {
+	b := (budgetCycles + 255) >> 8
+	if b > 0xFFFFFF {
+		b = 0xFFFFFF
+	}
+	m.Mem.Main[defs["BUDGET0"]] = byte(b)
+	m.Mem.Main[defs["BUDGET1"]] = byte(b >> 8)
+	m.Mem.Main[defs["BUDGET2"]] = byte(b >> 16)
+	m.Mem.Main[defs["MAXDEPTH"]] = maxDepth
+}
+
 // SearchResult is the outcome of running the engine binary once.
 type SearchResult struct {
 	Move   string // UCI ("e2e4", "e7e8q"), or "" if no legal move
@@ -201,15 +215,8 @@ func SearchBudget(bin []byte, defs Defs, pos *Position, maxDepth byte, budget ui
 	if err != nil {
 		return nil, err
 	}
-	m.Mem.Main[defs["MAXDEPTH"]] = maxDepth
+	SetBudget(m, defs, budget, maxDepth)
 	m.Mem.Main[defs["HALFMOVE"]] = pos.Halfmove
-	b := budget >> 8
-	if b > 0xFFFFFF {
-		b = 0xFFFFFF
-	}
-	m.Mem.Main[defs["BUDGET0"]] = byte(b)
-	m.Mem.Main[defs["BUDGET1"]] = byte(b >> 8)
-	m.Mem.Main[defs["BUDGET2"]] = byte(b >> 16)
 
 	exited, code, err := m.Run(maxCycles)
 	if err != nil {

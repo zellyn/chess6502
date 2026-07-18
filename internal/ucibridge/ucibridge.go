@@ -175,17 +175,17 @@ func (b *Bridge) think(args []string) (string, error) {
 	if d, ok := goDepth(args); ok {
 		depth, budget = d, 0 // fixed-depth mode
 	}
-	m.Mem.Main[b.Defs["MAXDEPTH"]] = depth
+	chesstest.SetBudget(m, b.Defs, budget, depth)
 	m.Mem.Main[b.Defs["HALFMOVE"]] = byte(min(b.pos.HalfmoveClock(), 255))
-	bu := budget >> 8
-	m.Mem.Main[b.Defs["BUDGET0"]] = byte(bu)
-	m.Mem.Main[b.Defs["BUDGET1"]] = byte(bu >> 8)
-	m.Mem.Main[b.Defs["BUDGET2"]] = byte(bu >> 16)
 	if b.aux != nil {
 		copy(m.Mem.Aux[:], b.aux) // restore the TT
 	}
 
-	exited, code, err := m.Run(budget*3 + 4_000_000_000)
+	runCap := budget*3 + 4_000_000_000
+	if budget == 0 {
+		runCap = 300_000_000_000 // fixed-depth mode: deep searches take what they take
+	}
+	exited, code, err := m.Run(runCap)
 	if err != nil {
 		return "", err
 	}

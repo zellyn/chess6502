@@ -237,7 +237,23 @@ eval:
 :       tax
         lda PHASEW,x
         sta EVTMP               ; w, 0..32
-        ; D = MG - EG, signed
+        ; fast paths: w=32 (full middlegame) is pure MG, w=0 pure EG —
+        ; no multiply needed. w=32 covers every opening/middlegame node.
+        cmp #32
+        bne :+
+        lda MGSCORE
+        sta SCORE
+        lda MGSCORE+1
+        sta SCORE+1
+        jmp evpov
+:       cmp #0
+        bne :+
+        lda EGSCORE
+        sta SCORE
+        lda EGSCORE+1
+        sta SCORE+1
+        jmp evpov
+:       ; D = MG - EG, signed
         sec
         lda MGSCORE
         sbc EGSCORE
@@ -309,7 +325,7 @@ evnosgn:
         lda EGSCORE+1
         adc MUL1
         sta SCORE+1
-        ; side-to-move POV
+evpov:  ; side-to-move POV
         lda SIDE
         beq evwtm
         sec
