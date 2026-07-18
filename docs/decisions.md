@@ -67,7 +67,15 @@ aux for tables with dead-simple rules. Critical correctness details
 
 The audit suite validates the underlying switch semantics.
 
-## D5: Board representation: 0x88 board + piece lists — proposed
+## D5: Board representation: 0x88 board + piece lists — accepted (M1 measured)
+
+M1 outcome (2026-07-17): implemented with board-byte-encoded list indexes
+and tombstone removal; perft exact on all six standard positions, at
+~1,600-1,800 cycles/leaf (make + in-check + unmake + amortized movegen)
+=> ~580 NPS equivalent, inside the plan's 420-680 budget band. The
+comparison 10x12 arm was not built: the budget gate passed with margin,
+so the extra arm would only be justified if optimization later stalls.
+Original proposal follows.
 
 0x88 gives a one-instruction off-board test (`AND #$88`), signed-byte move
 deltas, and difference-indexed attack/direction lookup tables (256-byte,
