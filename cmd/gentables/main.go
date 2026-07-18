@@ -240,6 +240,13 @@ func emitZobrist(b *strings.Builder) {
 	stm := key()
 	fmt.Fprintf(b, "STMKEY:\n        .byte $%02X,$%02X,$%02X,$%02X\n",
 		stm[0], stm[1], stm[2], stm[3])
+	// Unrolled side-to-move hash update (runs on every make/unmakenull;
+	// the immediate forms halve the looped version's cost).
+	b.WriteString("hashstm:\n")
+	for i, kb := range stm {
+		fmt.Fprintf(b, "        lda HASH%d\n        eor #$%02X\n        sta HASH%d\n", i, kb, i)
+	}
+	b.WriteString("        rts\n")
 	// Castling keys: one 4-byte key per rights nibble value.
 	b.WriteString("CASTKEYS:\n")
 	for range 16 {

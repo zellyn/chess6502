@@ -10,6 +10,10 @@ TYPEATKTAB:
 ; Out: carry set if attacked. Clobbers A,X,Y, ATSLOT/ATTMP/ATBITS/DIFF/ATDELTA.
 ; ---------------------------------------------------------------
 attacked:
+        lda ATSQ
+        clc
+        adc #$77
+        sta ATT77               ; diff = ATT77 - from, computed per slot
         lda ATSIDE
         asl                     ; slot base: 0 or $10
         sta ATSLOT
@@ -18,11 +22,9 @@ atloop: ldy ATSLOT
         cmp #NOSQ
         beq atnext
         sta ATTMP               ; candidate attacker square
-        lda ATSQ
+        lda ATT77
         sec
         sbc ATTMP
-        clc
-        adc #$77
         sta DIFF
         tay
         lda ATTACKTAB,y

@@ -172,15 +172,8 @@ heloop: lda EPKEYS,y
         bne heloop
         rts
 
-; hashstm: xor the side-to-move key. Clobbers A,X.
-hashstm:
-        ldx #3
-hsloop: lda STMKEY,x
-        eor HASH0,x
-        sta HASH0,x
-        dex
-        bpl hsloop
-        rts
+; hashstm (the side-to-move xor) is emitted unrolled by cmd/gentables,
+; since only tables.s knows the key bytes at assembly time.
 
 ; ---------------------------------------------------------------
 ; pawnterm: recompute PSTRUCT (white POV): doubled/isolated/passed

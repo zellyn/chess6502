@@ -80,6 +80,7 @@ DIFF      = $26         ; attacked(): saved difference index
 ATDELTA   = $27         ; attacked(): slider step delta
 GCOUNT    = $28         ; movegen: offset-loop counter
 CRTMP     = $29         ; castle helpers: rook piece byte
+ATT77     = $2A         ; attacked(): ATSQ + $77, precomputed at entry
 
 BOARD     = $40         ; 128-byte 0x88 board, $40..$BF
 

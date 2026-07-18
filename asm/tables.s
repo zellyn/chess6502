@@ -697,6 +697,20 @@ ZPLHI3:
         .byte >ZPLANE3+0,>ZPLANE3+0,>ZPLANE3+1,>ZPLANE3+1,>ZPLANE3+2,>ZPLANE3+2,>ZPLANE3+3,>ZPLANE3+3,>ZPLANE3+4,>ZPLANE3+4,>ZPLANE3+5,>ZPLANE3+5
 STMKEY:
         .byte $67,$57,$FB,$07
+hashstm:
+        lda HASH0
+        eor #$67
+        sta HASH0
+        lda HASH1
+        eor #$57
+        sta HASH1
+        lda HASH2
+        eor #$FB
+        sta HASH2
+        lda HASH3
+        eor #$07
+        sta HASH3
+        rts
 CASTKEYS:
         .byte $1E,$EA,$04,$E2
         .byte $F4,$F3,$DD,$59

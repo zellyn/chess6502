@@ -745,7 +745,36 @@ sdelta: ; delta pruning: skip if the victim can't lift standpat to alpha
         jmp sloop
 sdomove:
         jsr make
-        ; legality: mover must not leave their king attacked
+        ; lazy legality (perf review F1): when the mover was not in
+        ; check, only king moves, ep captures, and moves leaving a
+        ; king-aligned square can possibly be illegal. Everything else
+        ; skips the full attacked() scan. Conservative: alignment means
+        ; "run the full check", not "illegal".
+        ldx PLY
+        lda INCHK-1,x           ; parent ply's in-check state
+        bne slfull
+        lda MVFLAGS
+        and #FL_EP
+        bne slfull
+        lda MVPIECE
+        and #TYPEMASK
+        cmp #KING
+        beq slfull
+        lda SIDE
+        eor #COLORMASK
+        asl
+        tay
+        lda PIECESQ,y           ; mover's king square
+        sec
+        sbc FROM
+        clc
+        adc #$77
+        tay
+        lda ATTACKTAB,y
+        and #ATK_DIAG|ATK_ORTHO
+        bne slfull              ; from-square king-aligned: maybe pinned
+        jmp slegal              ; provably legal
+slfull: ; full check: mover must not leave their king attacked
         lda SIDE
         sta ATSIDE
         eor #COLORMASK
