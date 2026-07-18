@@ -153,6 +153,8 @@ sdrawend:
         sta LEGALCNT,y
         sta QSKIND,y
         sta RAISED,y
+        sta INCHK,y
+        sta FUTILE,y
         lda #NOSQ
         sta TTFROMA,y
         sta TTBF,y
@@ -180,7 +182,7 @@ sdrawend:
         cmp T0
         bcc ttcut               ; remaining < stored depth
         beq ttcut               ; equal: cutoff ok
-snodej: jmp snode               ; otherwise ordering only
+snodej: jmp sprep               ; otherwise ordering only
 ttcut:  lda TTENTRY+7
         and #$03
         cmp #TT_EXACT
@@ -195,7 +197,7 @@ ttcut:  lda TTENTRY+7
         sbc ALPHAHI,y
         bvc :+
         eor #$80
-:       bpl snode               ; score > alpha: not usable
+:       bpl snodej              ; score > alpha: not usable
         lda ALPHALO,y
         sta SCORE
         lda ALPHAHI,y
@@ -209,7 +211,7 @@ ttlower:                        ; usable if score >= beta
         sbc BETAHI,y
         bvc :+
         eor #$80
-:       bmi snode               ; score < beta: not usable
+:       bmi snodej              ; score < beta: not usable
         lda BETALO,y
         sta SCORE
         lda BETAHI,y
@@ -224,7 +226,12 @@ ttexact:
 
 squiesce:
         jsr curincheck
-        bcs snode               ; in check: full evasion node
+        bcc :+
+        ldy PLY                 ; in check: full evasion node
+        lda #1
+        sta INCHK,y
+        jmp snode
+:
         ldy PLY
         lda #1
         sta QSKIND,y
@@ -252,11 +259,202 @@ qsnofh: ; if SCORE > ALPHA: ALPHA = SCORE
         sbc SCORE+1
         bvc :+
         eor #$80
-:       bpl snode
-        lda SCORE
+:       bmi :+
+        jmp snode               ; no improvement
+:       lda SCORE
         sta ALPHALO,y
         lda SCORE+1
         sta ALPHAHI,y
+        jmp snode               ; qs nodes skip sprep (no null/futility)
+
+; ---------------------------------------------------------------
+; sprep: full-width-node pruning, before move generation.
+; ---------------------------------------------------------------
+sprep:  ldy PLY
+        jsr curincheck
+        ldy PLY
+        lda #0
+        rol                     ; carry (in check) -> A
+        sta INCHK,y
+        beq :+
+        jmp snode               ; in check: no null, no RFP, no futility
+:       ; ---- null move: FT_NULL, remaining >= 2, phase >= 3, beta
+        ; below the mate zone
+        lda FEATURES
+        and #FT_NULL
+        bne :+
+        jmp snonull
+:       lda MAXDEPTH
+        sec
+        sbc PLY
+        cmp #2
+        bcc snonull
+        lda PHASE
+        cmp #3
+        bcc snonull
+        lda BETAHI,y
+        cmp #$74
+        bcs snonull
+        jsr makenull
+        ldy PLY                 ; child ply: zero window around -beta
+        sec
+        lda #0
+        sbc BETALO-1,y
+        sta ALPHALO,y
+        sta BETALO,y
+        lda #0
+        sbc BETAHI-1,y
+        sta ALPHAHI,y
+        sta BETAHI,y
+        lda BETALO,y
+        clc
+        adc #1
+        sta BETALO,y
+        bcc :+
+        lda BETAHI,y
+        adc #0                  ; carry set: +1
+        sta BETAHI,y
+:       lda MAXDEPTH            ; reduce by R=2 for the null subtree
+        pha
+        sec
+        sbc #2
+        sta MAXDEPTH
+        jsr search
+        pla
+        sta MAXDEPTH
+        jsr unmakenull
+        sec                     ; SCORE = -SCORE
+        lda #0
+        sbc SCORE
+        sta SCORE
+        lda #0
+        sbc SCORE+1
+        sta SCORE+1
+        ldy PLY
+        sec
+        lda SCORE
+        sbc BETALO,y
+        lda SCORE+1
+        sbc BETAHI,y
+        bvc :+
+        eor #$80
+:       bmi snonull             ; below beta: search normally
+        lda BETALO,y            ; null cutoff: fail hard
+        sta SCORE
+        lda BETAHI,y
+        sta SCORE+1
+        rts
+snonull:
+        ; ---- RFP + futility: FT_FUTIL, remaining <= 2
+        lda FEATURES
+        and #FT_FUTIL
+        beq sprepj
+        lda MAXDEPTH
+        sec
+        sbc PLY
+        sta REMDEPTH
+        cmp #3
+        bcs sprepj
+        jsr eval
+        ldy PLY
+        lda #120                ; margin: 120 at depth 1, 250 at depth 2
+        ldx REMDEPTH
+        cpx #2
+        bcc :+
+        lda #250
+:       sta FUTMARG
+        ; reverse futility: eval - margin >= beta -> fail high
+        sec
+        lda SCORE
+        sbc FUTMARG
+        sta T0
+        lda SCORE+1
+        sbc #0
+        sta T1
+        sec
+        lda T0
+        sbc BETALO,y
+        lda T1
+        sbc BETAHI,y
+        bvc :+
+        eor #$80
+:       bmi srfpno
+        lda BETALO,y
+        sta SCORE
+        lda BETAHI,y
+        sta SCORE+1
+        rts
+srfpno: ; futility (depth 1): eval + margin <= alpha -> quiets can't help
+        lda REMDEPTH
+        cmp #1
+        bne sprepj
+        clc
+        lda SCORE
+        adc FUTMARG
+        sta T0
+        lda SCORE+1
+        adc #0
+        sta T1
+        sec
+        lda ALPHALO,y
+        sbc T0
+        lda ALPHAHI,y
+        sbc T1
+        bvc :+
+        eor #$80
+:       bmi sprepj              ; alpha < eval+margin: quiets may matter
+        lda #1
+        sta FUTILE,y
+sprepj: jmp snode
+
+; makenull / unmakenull: pass the move. Only ep, the hash, the halfmove
+; clock, and the side flip change; accumulators are untouched.
+makenull:
+        ldx PLY
+        lda EPSQ
+        sta UNDOEP,x
+        lda HALFMOVE
+        sta UNDOHALF,x
+        lda HASH0
+        sta HASHSTK0,x
+        lda HASH1
+        sta HASHSTK1,x
+        lda HASH2
+        sta HASHSTK2,x
+        lda HASH3
+        sta HASHSTK3,x
+        lda EPSQ
+        cmp #NOSQ
+        beq :+
+        jsr hashep              ; xor out the ep file
+        lda #NOSQ
+        sta EPSQ
+:       jsr hashstm
+        lda SIDE
+        eor #COLORMASK
+        sta SIDE
+        inc HALFMOVE
+        inc PLY
+        rts
+unmakenull:
+        dec PLY
+        ldx PLY
+        lda SIDE
+        eor #COLORMASK
+        sta SIDE
+        lda UNDOEP,x
+        sta EPSQ
+        lda UNDOHALF,x
+        sta HALFMOVE
+        lda HASHSTK0,x
+        sta HASH0
+        lda HASHSTK1,x
+        sta HASH1
+        lda HASHSTK2,x
+        sta HASH2
+        lda HASHSTK3,x
+        sta HASH3
+        rts
 
 snode:  ldy PLY
         lda QSKIND,y            ; qs capture-only nodes generate only captures
@@ -283,20 +481,32 @@ sloop:  ldy PLY
         lda CURSORHI,y
         cmp PLYENDHI,y
         bne sfetch
-        ; end of list: pass 0 -> 1; 1 -> 2 (qs-capture nodes stop); 2 -> done
+        ; end of list: 0 (TT move) -> 1 (captures) -> 2 (killers) ->
+        ; 3 (quiets) -> done; qs and futility-pruned nodes stop after 1
         lda PASSNO,y
-        cmp #2
+        cmp #3
         bcc :+
         jmp sdone
 :       cmp #1
-        bne spass1
-        lda QSKIND,y
-        beq spass2
-        jmp sdone
+        bcc spass1              ; pass 0 done -> captures
+        bne spass3              ; pass 2 done -> rest of quiets
+        lda QSKIND,y            ; pass 1 done:
+        beq :+
+        jmp sdone               ; qs: captures only
+:       lda FUTILE,y
+        beq :+
+        jmp sdone               ; futility: quiets can't raise alpha
+:       lda FEATURES
+        and #FT_KILLER
+        bne spass2
+        beq spass3              ; killers off: skip their pass
 spass1: lda #1
         sta PASSNO,y
         bne spassgo             ; always
 spass2: lda #2
+        sta PASSNO,y
+        bne spassgo             ; always
+spass3: lda #3
         sta PASSNO,y
 spassgo:
         lda PLYBASELO,y
@@ -332,11 +542,13 @@ sfetch: lda CURSORLO,y
         bne snotp0
         lda FROM
         cmp TTFROMA,y
-        bne sloopj
-        lda TO
+        beq :+
+        jmp sloop
+:       lda TO
         cmp TTTOA,y
-        bne sloopj
-        jmp sdomove
+        beq :+
+        jmp sloop
+:       jmp sdomove
 snotp0: ldx TTFROMA,y
         cpx #NOSQ
         beq snotttm
@@ -347,7 +559,8 @@ snotp0: ldx TTFROMA,y
         bne snotttm
         jmp sloop               ; the TT move: already searched in pass 0
 snotttm:
-        ; captures/promotions in pass 1, quiets in pass 2
+        ; captures/promotions in pass 1; quiets in pass 2 (killers) and
+        ; pass 3 (the rest)
         ldx TO
         lda BOARD,x
         bne siscap
@@ -356,19 +569,55 @@ snotttm:
         bne siscap
         lda PASSNO,y
         cmp #2
-        bne sloopj              ; quiets only in pass 2
-        beq sdomove             ; always
+        beq squietk
+        cmp #3
+        beq squietr
+        jmp sloop               ; passes 0/1: no quiets
+squietk:                        ; killer pass: only killer matches
+        lda KILLER1F,y
+        cmp FROM
+        bne :+
+        lda KILLER1T,y
+        cmp TO
+        beq sdomovej
+:       lda KILLER2F,y
+        cmp FROM
+        bne :+
+        lda KILLER2T,y
+        cmp TO
+        beq sdomovej
+:       jmp sloop
+squietr:                        ; final pass: skip killers (already done)
+        lda FEATURES
+        and #FT_KILLER
+        beq sdomovej
+        lda KILLER1F,y
+        cmp FROM
+        bne :+
+        lda KILLER1T,y
+        cmp TO
+        beq skskip
+:       lda KILLER2F,y
+        cmp FROM
+        bne sdomovej
+        lda KILLER2T,y
+        cmp TO
+        bne sdomovej
+skskip: jmp sloop
+sdomovej:
+        jmp sdomove
 siscap: lda PASSNO,y
         cmp #2
-        beq sloopj              ; captures were pass 1
-        ; qs nodes: queen promotions only
+        bcc :+
+        jmp sloop               ; captures were pass 1
+:       ; qs nodes: queen promotions only
         lda QSKIND,y
         beq sdomove
         lda MVFLAGS
         and #FL_PROMO
         beq sdomove
         cmp #QUEEN
-        bne sloopj
+        bne skskip
 sdomove:
         jsr make
         ; legality: mover must not leave their king attacked
@@ -431,6 +680,33 @@ slegal: ldy PLY                 ; PLY = child here
         lda QSKIND,y            ; TT: lower bound + the cutting move
         bne sbetapop
         jsr setmove3
+        ; killers: remember quiet cutoff moves
+        lda FEATURES
+        and #FT_KILLER
+        beq snokupd
+        ldx TTENTRY+4
+        lda BOARD,x             ; board is restored: nonzero = capture
+        bne snokupd
+        ldy #2
+        lda (CURPTR),y          ; setmove3 left CURPTR at the move
+        and #FL_EP|FL_PROMO
+        bne snokupd
+        ldy PLY
+        lda TTENTRY+3
+        cmp KILLER1F,y
+        bne skupd
+        lda TTENTRY+4
+        cmp KILLER1T,y
+        beq snokupd             ; already killer 1
+skupd:  lda KILLER1F,y
+        sta KILLER2F,y
+        lda KILLER1T,y
+        sta KILLER2T,y
+        lda TTENTRY+3
+        sta KILLER1F,y
+        lda TTENTRY+4
+        sta KILLER1T,y
+snokupd:
         lda SCORE
         sta TTENTRY+5
         lda SCORE+1
@@ -480,8 +756,10 @@ sdone:  ; return alpha; full-width nodes with no legal moves: mate/stalemate
         bne sretqs
         lda LEGALCNT,y
         bne sret
-        jsr curincheck
-        bcs smated
+        lda FUTILE,y
+        bne sretqs              ; quiets were pruned: can't claim mate
+        lda INCHK,y             ; computed at node entry
+        bne smated
         lda #0                  ; stalemate
         sta SCORE
         sta SCORE+1

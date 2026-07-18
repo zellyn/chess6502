@@ -169,7 +169,14 @@ func NewMachine(bin []byte, defs Defs, pos *Position, depth byte, cout io.Writer
 	m.Mem.Main[defs["EPSQ"]] = pos.EpSq
 	m.Mem.Main[defs["CASTLE"]] = pos.Castle
 	m.Mem.Main[defs["ROOTDEPTH"]] = depth
+	m.Mem.Main[defs["FEATURES"]] = 0x07 // all search features on
 	return m, nil
+}
+
+// SetFeatures overrides the engine's search-feature bits (FT_* in
+// defs.inc) — the A/B lever for feature gating.
+func SetFeatures(m *harness.Machine, defs Defs, bits byte) {
+	m.Mem.Main[defs["FEATURES"]] = bits
 }
 
 // SearchResult is the outcome of running the engine binary once.

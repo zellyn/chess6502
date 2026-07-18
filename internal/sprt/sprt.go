@@ -1,0 +1,241 @@
+// Package sprt is the self-play feature-gating rig: paired openings,
+// fixed emulated-cycle budgets, refchess adjudication, parallel games,
+// and SPRT/Elo statistics. This is the merge gate for search features
+// (docs/plan.md, D11 part 1).
+package sprt
+
+import (
+	"fmt"
+	"math"
+	"sync"
+
+	"github.com/zellyn/chess6502/internal/chesstest"
+	"github.com/zellyn/chess6502/internal/refchess"
+)
+
+// Openings: short balanced lines (UCI moves). Each is played twice per
+// pair, colors reversed.
+var Openings = [][]string{
+	{"e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"},
+	{"e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5"},
+	{"e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4"},
+	{"e2e4", "c7c5", "g1f3", "b8c6", "d2d4", "c5d4"},
+	{"e2e4", "e7e6", "d2d4", "d7d5", "b1c3", "g8f6"},
+	{"e2e4", "c7c6", "d2d4", "d7d5", "e4e5", "c8f5"},
+	{"e2e4", "d7d5", "e4d5", "d8d5", "b1c3", "d5a5"},
+	{"d2d4", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6"},
+	{"d2d4", "d7d5", "c2c4", "c7c6", "g1f3", "g8f6"},
+	{"d2d4", "g8f6", "c2c4", "e7e6", "b1c3", "f8b4"},
+	{"d2d4", "g8f6", "c2c4", "g7g6", "b1c3", "f8g7"},
+	{"d2d4", "g8f6", "c2c4", "e7e6", "g1f3", "b7b6"},
+	{"d2d4", "f7f5", "g2g3", "g8f6", "f1g2", "e7e6"},
+	{"g1f3", "d7d5", "g2g3", "g8f6", "f1g2", "e7e6"},
+	{"c2c4", "e7e5", "b1c3", "g8f6", "g1f3", "b8c6"},
+	{"c2c4", "c7c5", "g1f3", "g8f6", "d2d4", "c5d4"},
+	{"e2e4", "e7e5", "f1c4", "g8f6", "d2d3", "b8c6"},
+	{"d2d4", "d7d6", "e2e4", "g8f6", "b1c3", "g7g6"},
+	{"e2e4", "g7g6", "d2d4", "f8g7", "b1c3", "d7d6"},
+	{"g1f3", "g8f6", "c2c4", "c7c5", "b1c3", "b8c6"},
+}
+
+// Config for a match between two feature configurations of the same
+// engine binary.
+type Config struct {
+	Bin          []byte
+	Defs         chesstest.Defs
+	FeaturesA    byte
+	FeaturesB    byte
+	BudgetCycles uint64
+	Pairs        int // games = 2*Pairs (each opening pair, colors swapped)
+	Parallel     int
+}
+
+// Result tallies from A's perspective.
+type Result struct {
+	Wins, Draws, Losses int
+	Errors              []string
+}
+
+func (r *Result) Games() int { return r.Wins + r.Draws + r.Losses }
+
+// Score returns A's score fraction.
+func (r *Result) Score() float64 {
+	if r.Games() == 0 {
+		return 0.5
+	}
+	return (float64(r.Wins) + 0.5*float64(r.Draws)) / float64(r.Games())
+}
+
+// EloDiff returns the Elo estimate and its ~95% error margin.
+func (r *Result) EloDiff() (elo, margin float64) {
+	n := float64(r.Games())
+	if n == 0 {
+		return 0, math.Inf(1)
+	}
+	s := r.Score()
+	if s <= 0 {
+		return math.Inf(-1), math.Inf(1)
+	}
+	if s >= 1 {
+		return math.Inf(1), math.Inf(1)
+	}
+	elo = -400 * math.Log10(1/s-1)
+	// Binomial-ish std error on the score fraction.
+	w, d, l := float64(r.Wins)/n, float64(r.Draws)/n, float64(r.Losses)/n
+	varS := w*(1-s)*(1-s) + d*(0.5-s)*(0.5-s) + l*s*s
+	se := math.Sqrt(varS / n)
+	if se > 0 {
+		lo, hi := s-1.96*se, s+1.96*se
+		lo = math.Max(lo, 1e-9)
+		hi = math.Min(hi, 1-1e-9)
+		margin = (-400*math.Log10(1/hi-1) + 400*math.Log10(1/lo-1)) / 2
+	}
+	return elo, margin
+}
+
+// LLR computes the simple trinomial SPRT log-likelihood ratio for
+// H1: elo=elo1 vs H0: elo=elo0 (GSPRT approximation).
+func (r *Result) LLR(elo0, elo1 float64) float64 {
+	n := float64(r.Games())
+	if n == 0 || r.Wins == 0 || r.Losses == 0 {
+		return 0
+	}
+	s := r.Score()
+	w, d := float64(r.Wins)/n, float64(r.Draws)/n
+	varS := w*(1-s)*(1-s) + d*(0.5-s)*(0.5-s) + (1-w-d)*s*s
+	if varS <= 0 {
+		return 0
+	}
+	s0 := 1 / (1 + math.Pow(10, -elo0/400))
+	s1 := 1 / (1 + math.Pow(10, -elo1/400))
+	return (s1 - s0) * (2*s*n - n*(s0+s1)) / (2 * varS)
+}
+
+// Run plays the match. Openings cycle; each pair is one opening with
+// colors swapped.
+func Run(cfg Config) *Result {
+	if cfg.Parallel <= 0 {
+		cfg.Parallel = 1
+	}
+	res := &Result{}
+	var mu sync.Mutex
+	sem := make(chan struct{}, cfg.Parallel)
+	var wg sync.WaitGroup
+	for p := 0; p < cfg.Pairs; p++ {
+		for _, aWhite := range []bool{true, false} {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(opening int, aWhite bool) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				outcome, err := playGame(cfg, Openings[opening%len(Openings)], aWhite)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					res.Errors = append(res.Errors, err.Error())
+					return
+				}
+				switch outcome {
+				case 1:
+					res.Wins++
+				case 0:
+					res.Draws++
+				case -1:
+					res.Losses++
+				}
+			}(p, aWhite)
+		}
+	}
+	wg.Wait()
+	return res
+}
+
+// playGame returns +1/0/-1 from A's perspective.
+func playGame(cfg Config, opening []string, aWhite bool) (int, error) {
+	ref, err := refchess.ParseFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+	if err != nil {
+		return 0, err
+	}
+	for _, ms := range opening {
+		mv, err := refchess.ParseMove(ms)
+		if err != nil {
+			return 0, err
+		}
+		if err := ref.Make(mv); err != nil {
+			return 0, err
+		}
+	}
+	seen := map[uint64]int{}
+	auxes := map[bool][]byte{} // per-side TT carryover
+	for ply := 0; ply < 400; ply++ {
+		if ref.HalfmoveClock() >= 100 || ref.InsufficientMaterial() {
+			return 0, nil
+		}
+		seen[ref.ZobristKey()]++
+		if seen[ref.ZobristKey()] >= 3 {
+			return 0, nil
+		}
+		legal := ref.LegalMoves()
+		aTurn := (ref.SideToMove() == 0) == aWhite
+		if len(legal) == 0 {
+			if !ref.InCheck() {
+				return 0, nil // stalemate
+			}
+			if aTurn {
+				return -1, nil
+			}
+			return 1, nil
+		}
+		features := cfg.FeaturesA
+		if !aTurn {
+			features = cfg.FeaturesB
+		}
+		pos, err := chesstest.ParseFEN(ref.FEN())
+		if err != nil {
+			return 0, err
+		}
+		m, err := chesstest.NewMachine(cfg.Bin, cfg.Defs, pos, 0, nil)
+		if err != nil {
+			return 0, err
+		}
+		chesstest.SetFeatures(m, cfg.Defs, features)
+		m.Mem.Main[cfg.Defs["MAXDEPTH"]] = 24
+		m.Mem.Main[cfg.Defs["HALFMOVE"]] = byte(min(ref.HalfmoveClock(), 255))
+		bu := cfg.BudgetCycles >> 8
+		m.Mem.Main[cfg.Defs["BUDGET0"]] = byte(bu)
+		m.Mem.Main[cfg.Defs["BUDGET1"]] = byte(bu >> 8)
+		m.Mem.Main[cfg.Defs["BUDGET2"]] = byte(bu >> 16)
+		if aux := auxes[aTurn]; aux != nil {
+			copy(m.Mem.Aux[:], aux)
+		}
+		exited, code, err := m.Run(cfg.BudgetCycles*3 + 2_000_000_000)
+		if err != nil || !exited {
+			return 0, fmt.Errorf("engine run: exited=%v err=%v (fen %q)", exited, err, ref.FEN())
+		}
+		if auxes[aTurn] == nil {
+			auxes[aTurn] = make([]byte, len(m.Mem.Aux))
+		}
+		copy(auxes[aTurn], m.Mem.Aux[:])
+		if code == 2 {
+			return 0, fmt.Errorf("engine says no move but referee disagrees (fen %q)", ref.FEN())
+		}
+		if code != 0 {
+			return 0, fmt.Errorf("engine exit code %d (fen %q)", code, ref.FEN())
+		}
+		from := m.Mem.Main[cfg.Defs["BESTFROM"]]
+		to := m.Mem.Main[cfg.Defs["BESTTO"]]
+		flags := m.Mem.Main[cfg.Defs["BESTFLAGS"]]
+		ms := fmt.Sprintf("%c%c%c%c", 'a'+from&0x0F, '1'+from>>4, 'a'+to&0x0F, '1'+to>>4)
+		if p := flags & 0x07; p != 0 {
+			ms += string("..nbrq"[p])
+		}
+		mv, err := refchess.ParseMove(ms)
+		if err != nil {
+			return 0, err
+		}
+		if err := ref.Make(mv); err != nil {
+			return 0, fmt.Errorf("ILLEGAL MOVE %q (fen %q): %w", ms, ref.FEN(), err)
+		}
+	}
+	return 0, nil
+}

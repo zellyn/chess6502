@@ -122,6 +122,13 @@ TTPTR     = $F0         ; 16-bit: aux address of the current TT entry
 TTENTRY   = $F2         ; 8-byte staging copy of a TT entry:
                         ;  +0..2 verify (HASH1-3), +3 from, +4 to,
                         ;  +5/6 score LE, +7 depth<<2 | bound
+FEATURES  = $FA         ; search feature bits (poked by the rig)
+REMDEPTH  = $FB         ; scratch: remaining depth at this node
+FUTMARG   = $FC         ; scratch: futility margin work
+
+FT_NULL   = $01         ; null-move pruning (R=2)
+FT_KILLER = $02         ; killer-move ordering
+FT_FUTIL  = $04         ; futility + reverse-futility at depth <= 2
 
 ; TT bound codes (in entry byte 7, low 2 bits; 0 = empty entry)
 TT_UPPER = 1
@@ -173,8 +180,14 @@ TTTOA      = $0C20
 TTBF       = $0C40      ; best move found at this ply (for the TT store)
 TTBT       = $0C60
 RAISED     = $0C80      ; nonzero: alpha was raised at this ply (EXACT bound)
+KILLER1F   = $0CA0      ; killer moves: two quiet cutoff moves per ply
+KILLER1T   = $0CC0
+KILLER2F   = $0CE0
+KILLER2T   = $0D00
+INCHK      = $0D20      ; nonzero: side to move in check at this ply
+FUTILE     = $0D40      ; nonzero: prune quiets at this ply (futility)
 
-MOVESTACK  = $0D00      ; 3 bytes/move (from,to,flags); through $1FFF
+MOVESTACK  = $0E00      ; 3 bytes/move (from,to,flags); through $1FFF
 MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this
 
 ; Transposition table: 4096 x 8 bytes in AUX $0200-$81FF (see D6).
