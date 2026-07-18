@@ -33,6 +33,8 @@ func TestMain(m *testing.M) {
 	run(root, "go", "run", "./cmd/gentables")
 	run(asm, "ca65", "perft.s", "-o", "perft.o")
 	run(asm, "ld65", "-C", "perft.cfg", "perft.o", "-o", "perft.bin", "-Ln", "perft.lbl")
+	run(asm, "ca65", "banktest.s", "-o", "banktest.o")
+	run(asm, "ld65", "-C", "banktest.cfg", "banktest.o", "-o", "banktest.bin")
 	perftBin, err = os.ReadFile(filepath.Join(asm, "perft.bin"))
 	if err != nil {
 		panic(err)

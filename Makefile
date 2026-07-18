@@ -23,6 +23,13 @@ hello/hello.bin: hello/hello.s hello/raw2000.cfg
 
 perft: asm/perft.bin
 
+banktest: asm/banktest.bin
+	go run ./cmd/a2run -bin asm/banktest.bin
+
+asm/banktest.bin: asm/banktest.s asm/banktest.cfg
+	cd asm && $(CA65) banktest.s -o banktest.o
+	cd asm && $(LD65) -C banktest.cfg banktest.o -o banktest.bin
+
 asm/tables.s: cmd/gentables/main.go
 	go run ./cmd/gentables
 
