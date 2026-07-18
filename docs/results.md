@@ -3,6 +3,24 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — post-fix measurements
+
+Feature gates, self-play at 30 emulated s/move, generated paired
+openings (80 games each; the fourth run was cut off by a task limit):
+null +0 +/- 47, killers +26 +/- 50, futility +0 +/- 49. The 43%
+tree-size win compresses to small Elo in self-play at these depths;
+resolving +20-30 needs 400+ games (queued).
+
+TSCP-d3 rematch at 30 emulated s/move: **0-20**. But the game character
+changed completely: no more degenerate moves — legal, coherent,
+planless chess, ground down positionally (opponent evals creep +0.4 to
++5 over ~25 moves). Diagnosis for next session: (a) instrument realized
+search depth per move in games; (b) the eval gap — TSCP has pawn
+structure + king safety, we are PSQT-only (M5 terms may now be worth
+more than search); (c) deterministic + bookless = the same losing line
+repeats every White game (book/variety, M6); (d) A/B the TT aux
+carryover, which was never gated.
+
 ## 2026-07-18 — M4 debugging night: the pruning stack made real
 
 Fixed-depth tree size on the reference middlegame position (cycles to
