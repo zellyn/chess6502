@@ -153,9 +153,7 @@ mkhavecap:
         ; remove victim: hash+eval out, clear square, tombstone list slot
         sta VICTIM
 .ifndef NOEVAL
-        jsr hashpiece           ; A = victim, Y = capture square (kept)
-        lda VICTIM
-        jsr rempiece
+        jsr takepiece           ; A = victim, Y = capture square: fused
         ldx PLY
 .endif
         ldy UNDOCAPSQ,x
@@ -182,14 +180,11 @@ mkhmzero:
         lda #0
         sta HALFMOVE
 mkhmdone:
-        ; hash+eval: remove the mover from its origin
-        lda MVPIECE
-        ldy FROM
-        jsr hashpiece
-        lda MVPIECE
-        jsr rempiece            ; hashpiece preserved Y = FROM
 .endif
-        ; move the piece (promotion replaces the type bits)
+        ; move the piece. Non-promotion movers take the fused
+        ; movepiece (hash + psqt delta; PHASE provably cancels);
+        ; promotions change the piece byte, so they keep the split
+        ; hashpiece/rempiece/addpiece path.
         ldy FROM
         lda #0
         sta a:BOARD,y
@@ -200,20 +195,30 @@ mkhmdone:
         lda MVPIECE
         and #INDEXMASK|COLORMASK
         ora GTMP
-        bne mkplace             ; always (piece byte nonzero)
-mknopromo:
-        lda MVPIECE
-mkplace:
         sta CRTMP               ; final piece byte (post-promotion)
-        ldy TO
-        sta a:BOARD,y
 .ifndef NOEVAL
+        lda MVPIECE
+        ldy FROM
+        jsr hashpiece
+        lda MVPIECE
+        jsr rempiece            ; hashpiece preserved Y = FROM
         lda CRTMP
         ldy TO
         jsr hashpiece
         lda CRTMP
         jsr addpiece            ; hashpiece preserved Y = TO
 .endif
+        jmp mkplace
+mknopromo:
+        lda MVPIECE
+        sta CRTMP
+.ifndef NOEVAL
+        jsr movepiece           ; fused hash + psqt for the mover
+.endif
+mkplace:
+        ldy TO
+        lda CRTMP
+        sta a:BOARD,y
         ldy CRTMP
         lda SLOTTAB,y
         tay

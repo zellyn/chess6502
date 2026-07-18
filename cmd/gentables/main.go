@@ -205,12 +205,14 @@ func emitPSQT(b *strings.Builder) {
 	b.WriteString("\n")
 }
 
-// emitZobrist writes 32-bit Zobrist keys as four byte-planes, each
-// [12][128] (kind-major: white P..K = kinds 0-5, black = 6-11, 0x88
-// squares), plus side-to-move, castling-rights, and ep-file keys, and
-// the lookup tables that turn a piece byte into plane pointers:
-// KINDTAB[piece&$0F] -> kind, ZPLLO[kind] -> pointer lo byte,
-// ZPLHI0..3[kind] -> pointer hi byte per plane.
+// emitZobrist writes 32-bit Zobrist keys kind-major: ZKEYS + kind*512
+// holds plane0[128] plane1[128] plane2[128] plane3[128] for that kind
+// (white P..K = kinds 0-5, black = 6-11, 0x88 squares). Every block
+// starts on a page boundary, so a pointer to it has lo byte 0 — the
+// ZPTR invariant established in evalinit. ZKHI0[piece&$0F] gives the
+// block's page directly; DIRTYTAB/TYPEPG0X/TYPEPG1X/PHASEV16 are
+// companion piece&$0F-indexed tables for the fused make-path updates.
+// Also emitted: side-to-move, castling-rights, and ep-file keys.
 func emitZobrist(b *strings.Builder) {
 	rnd := rand.New(rand.NewPCG(0x6502c4e5, 0x0a11babe))
 	key := func() [4]byte {
@@ -218,7 +220,7 @@ func emitZobrist(b *strings.Builder) {
 		return [4]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}
 	}
 
-	var planes [4][12 * 128]byte
+	var keys [12 * 512]byte
 	for kind := range 12 {
 		for sq := range 128 {
 			if sq&0x88 != 0 {
@@ -226,45 +228,52 @@ func emitZobrist(b *strings.Builder) {
 			}
 			k := key()
 			for p := range 4 {
-				planes[p][kind*128+sq] = k[p]
+				keys[kind*512+p*128+sq] = k[p]
 			}
 		}
 	}
-	names := []string{"ZPLANE0", "ZPLANE1", "ZPLANE2", "ZPLANE3"}
-	for p, name := range names {
-		b.WriteString("\n.align 256\n")
-		emit(b, name, planes[p][:])
-	}
+	b.WriteString("\n.align 256\n")
+	emit(b, "ZKEYS", keys[:])
 
-	// KINDTAB: piece&$0F -> kind (color*6 + type-1); $FF for invalid.
-	var kindTab [16]byte
-	for i := range kindTab {
-		kindTab[i] = 0xFF
-	}
-	for typ := 1; typ <= 6; typ++ {
-		kindTab[typ] = byte(typ - 1)
-		kindTab[8|typ] = byte(6 + typ - 1)
-	}
-	emit(b, "KINDTAB", kindTab[:])
-	// Plane pointer tables: block = kind*128 within each 1536-byte plane.
-	b.WriteString("ZPLLO:\n        .byte ")
-	for kind := range 12 {
-		if kind > 0 {
-			b.WriteString(",")
-		}
-		fmt.Fprintf(b, "$%02X", (kind&1)*128)
-	}
-	b.WriteString("\n")
-	for p, name := range names {
-		fmt.Fprintf(b, "ZPLHI%d:\n        .byte ", p)
-		for kind := range 12 {
-			if kind > 0 {
+	// The piece&$0F-indexed tables (color bit 3 + type bits 0-2).
+	pieceIdx := func(name string, val func(typ, kind int) string) {
+		fmt.Fprintf(b, "%s:\n        .byte ", name)
+		for i := range 16 {
+			if i > 0 {
 				b.WriteString(",")
 			}
-			fmt.Fprintf(b, ">%s+%d", name, kind/2)
+			typ := i & 7
+			if typ < 1 || typ > 6 {
+				b.WriteString("0")
+				continue
+			}
+			kind := typ - 1
+			if i&8 != 0 {
+				kind += 6
+			}
+			b.WriteString(val(typ, kind))
 		}
 		b.WriteString("\n")
 	}
+	pieceIdx("ZKHI0", func(typ, kind int) string {
+		return fmt.Sprintf(">ZKEYS+%d", kind*2)
+	})
+	pieceIdx("DIRTYTAB", func(typ, kind int) string {
+		if typ == 1 || typ == 6 { // pawn or king: invalidate PSTRUCT
+			return "1"
+		}
+		return "0"
+	})
+	pieceIdx("TYPEPG0X", func(typ, kind int) string {
+		return fmt.Sprintf(">PSQTBASE+%d", (typ-1)*2)
+	})
+	pieceIdx("TYPEPG1X", func(typ, kind int) string {
+		return fmt.Sprintf(">PSQTBASE+%d", (typ-1)*2+1)
+	})
+	phaseVals := []int{0, 0, 1, 1, 2, 4, 0, 0}
+	pieceIdx("PHASEV16", func(typ, kind int) string {
+		return fmt.Sprintf("%d", phaseVals[typ])
+	})
 
 	stm := key()
 	fmt.Fprintf(b, "STMKEY:\n        .byte $%02X,$%02X,$%02X,$%02X\n",

@@ -110,35 +110,256 @@ psqsub: sec
 
 ; ---------------------------------------------------------------
 ; hashpiece: xor the Zobrist key for (A = piece byte, Y = square) into
-; HASH0-3. Y is preserved. Clobbers A,X.
+; HASH0-3. Y is preserved. Clobbers A,X, ZPTR+1.
+; Keys are kind-major (ZKEYS + kind*512 = p0[128] p1[128] p2[128]
+; p3[128]); ZPTR's lo byte is permanently 0 (evalinit invariant), so
+; one page byte selects the block and Y|$80 reaches the odd planes.
 ; ---------------------------------------------------------------
 hashpiece:
         and #$0F
         tax
-        lda KINDTAB,x
-        tax                     ; kind 0-11
-        lda ZPLLO,x
-        sta ZPTR
-        lda ZPLHI0,x
+        lda ZKHI0,x             ; kind block page
         sta ZPTR+1
-        lda (ZPTR),y
+        lda (ZPTR),y            ; +0:   plane0[sq]
         eor HASH0
         sta HASH0
-        lda ZPLHI1,x
-        sta ZPTR+1
-        lda (ZPTR),y
+        tya
+        ora #$80
+        tay
+        lda (ZPTR),y            ; +128: plane1[sq]
         eor HASH1
         sta HASH1
-        lda ZPLHI2,x
-        sta ZPTR+1
-        lda (ZPTR),y
-        eor HASH2
-        sta HASH2
-        lda ZPLHI3,x
-        sta ZPTR+1
-        lda (ZPTR),y
+        inc ZPTR+1
+        lda (ZPTR),y            ; +384: plane3[sq]
         eor HASH3
         sta HASH3
+        tya
+        and #$7F
+        tay                     ; Y restored = sq
+        lda (ZPTR),y            ; +256: plane2[sq]
+        eor HASH2
+        sta HASH2
+        rts
+
+; ---------------------------------------------------------------
+; movepiece: fused hash + psqt update for MVPIECE moving FROM -> TO
+; with the piece byte unchanged (i.e. NOT promotions; make keeps the
+; split path for those and for castlerook). PHASE is untouched — the
+; remove/add of the same piece provably cancels. Clobbers A,X,Y,
+; ZPTR+1, PSP0+1/PSP1+1, T0/T1. Requires the ZPTR/PSP0/PSP1 lo == 0
+; evalinit invariant.
+; ---------------------------------------------------------------
+movepiece:
+        lda MVPIECE
+        and #$0F
+        tax
+        lda DIRTYTAB,x          ; 1 for pawn/king (both colors), else 0
+        ora PDIRTY
+        sta PDIRTY
+        lda TYPEPG0X,x          ; PSQT pages for this type
+        sta PSP0+1
+        lda TYPEPG1X,x
+        sta PSP1+1
+        ; hash: xor key[kind][FROM] ^ key[kind][TO], all four planes
+        lda ZKHI0,x
+        sta ZPTR+1
+        ldy FROM
+        lda (ZPTR),y            ; p0[from]
+        eor HASH0
+        sta HASH0
+        ldy TO
+        lda (ZPTR),y            ; p0[to]
+        eor HASH0
+        sta HASH0
+        tya
+        ora #$80
+        tay
+        lda (ZPTR),y            ; p1[to]
+        eor HASH1
+        sta HASH1
+        lda FROM
+        ora #$80
+        tay
+        lda (ZPTR),y            ; p1[from]
+        eor HASH1
+        sta HASH1
+        inc ZPTR+1
+        lda (ZPTR),y            ; p3[from] (block +384)
+        eor HASH3
+        sta HASH3
+        lda TO
+        ora #$80
+        tay
+        lda (ZPTR),y            ; p3[to]
+        eor HASH3
+        sta HASH3
+        ldy TO
+        lda (ZPTR),y            ; p2[to]  (block +256)
+        eor HASH2
+        sta HASH2
+        ldy FROM
+        lda (ZPTR),y            ; p2[from]
+        eor HASH2
+        sta HASH2
+        ; psqt as a from/to delta straight into the accumulators.
+        ; white: score += tbl[TO] - tbl[FROM]
+        ; black: score += tbl[FROM^$70] - tbl[TO^$70]
+        lda MVPIECE
+        and #COLORMASK
+        beq mpwh
+        lda TO
+        eor #$70
+        sta T0                  ; subtract-square
+        lda FROM
+        eor #$70
+        sta T1                  ; add-square
+        jmp mpgo
+mpwh:   lda FROM
+        sta T0
+        lda TO
+        sta T1
+mpgo:   ldy T1                  ; MG += mg[T1]
+        clc
+        lda MGSCORE
+        adc (PSP0),y
+        sta MGSCORE
+        tya
+        ora #$80
+        tay                     ; (tya/ora/tay preserve carry)
+        lda MGSCORE+1
+        adc (PSP0),y
+        sta MGSCORE+1
+        ldy T0                  ; MG -= mg[T0]
+        sec
+        lda MGSCORE
+        sbc (PSP0),y
+        sta MGSCORE
+        tya
+        ora #$80
+        tay
+        lda MGSCORE+1
+        sbc (PSP0),y
+        sta MGSCORE+1
+        ldy T1                  ; EG += eg[T1]
+        clc
+        lda EGSCORE
+        adc (PSP1),y
+        sta EGSCORE
+        tya
+        ora #$80
+        tay
+        lda EGSCORE+1
+        adc (PSP1),y
+        sta EGSCORE+1
+        ldy T0                  ; EG -= eg[T0]
+        sec
+        lda EGSCORE
+        sbc (PSP1),y
+        sta EGSCORE
+        tya
+        ora #$80
+        tay
+        lda EGSCORE+1
+        sbc (PSP1),y
+        sta EGSCORE+1
+        rts
+
+; ---------------------------------------------------------------
+; takepiece: fused hash + phase + psqt removal of a captured piece.
+; A = victim piece byte, Y = capture square. Clobbers A,X,Y, ZPTR+1,
+; PSP0+1/PSP1+1, EVTMP. Same invariants as movepiece.
+; ---------------------------------------------------------------
+takepiece:
+        sty EVTMP               ; capture square
+        and #$0F
+        tax
+        lda DIRTYTAB,x
+        ora PDIRTY
+        sta PDIRTY
+        lda PHASE
+        sec
+        sbc PHASEV16,x          ; 0 for pawns: no-op by construction
+        sta PHASE
+        ; hash: xor key[kind][sq], all four planes
+        lda ZKHI0,x
+        sta ZPTR+1
+        lda (ZPTR),y            ; p0
+        eor HASH0
+        sta HASH0
+        tya
+        ora #$80
+        tay
+        lda (ZPTR),y            ; p1
+        eor HASH1
+        sta HASH1
+        inc ZPTR+1
+        lda (ZPTR),y            ; p3
+        eor HASH3
+        sta HASH3
+        tya
+        and #$7F
+        tay
+        lda (ZPTR),y            ; p2
+        eor HASH2
+        sta HASH2
+        ; psqt: white victim: score -= tbl[sq]; black: += tbl[sq^$70]
+        lda TYPEPG0X,x
+        sta PSP0+1
+        lda TYPEPG1X,x
+        sta PSP1+1
+        txa
+        and #COLORMASK
+        bne tpblack
+        ldy EVTMP
+        sec
+        lda MGSCORE
+        sbc (PSP0),y
+        sta MGSCORE
+        tya
+        ora #$80
+        tay
+        lda MGSCORE+1
+        sbc (PSP0),y
+        sta MGSCORE+1
+        ldy EVTMP
+        sec
+        lda EGSCORE
+        sbc (PSP1),y
+        sta EGSCORE
+        tya
+        ora #$80
+        tay
+        lda EGSCORE+1
+        sbc (PSP1),y
+        sta EGSCORE+1
+        rts
+tpblack:
+        lda EVTMP
+        eor #$70
+        tay
+        clc
+        lda MGSCORE
+        adc (PSP0),y
+        sta MGSCORE
+        tya
+        ora #$80
+        tay
+        lda MGSCORE+1
+        adc (PSP0),y
+        sta MGSCORE+1
+        lda EVTMP
+        eor #$70
+        tay
+        clc
+        lda EGSCORE
+        adc (PSP1),y
+        sta EGSCORE
+        tya
+        ora #$80
+        tay
+        lda EGSCORE+1
+        adc (PSP1),y
+        sta EGSCORE+1
         rts
 
 ; hashcastle: xor CASTKEYS[A] into HASH0-3. Clobbers A,X,Y.
@@ -488,6 +709,7 @@ evalinit:
         sta HASH3
         sta PSP0                ; pointer lo bytes are always 0
         sta PSP1
+        sta ZPTR                ; (the loader used ZPTR as scratch)
         sta GSLOT
 eviloop:
         ldy GSLOT

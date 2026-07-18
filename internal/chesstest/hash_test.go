@@ -36,7 +36,7 @@ func TestHashConsistency(t *testing.T) {
 		t.Skip("slow: full searches")
 	}
 	labels := parseLabels(t, filepath.Join("..", "..", "asm", "engine.lbl"))
-	for _, name := range []string{"ZPLANE0", "STMKEY", "CASTKEYS", "EPKEYS", "KINDTAB"} {
+	for _, name := range []string{"ZKEYS", "STMKEY", "CASTKEYS", "EPKEYS"} {
 		if _, ok := labels[name]; !ok {
 			t.Fatalf("label %s missing from engine.lbl", name)
 		}
@@ -69,16 +69,18 @@ func TestHashConsistency(t *testing.T) {
 				want[i] ^= m.Mem.Main[addr+uint16(i)]
 			}
 		}
-		zplane0 := labels["ZPLANE0"]
+		zkeys := labels["ZKEYS"]
 		for _, sq := range pos.PieceSq {
 			if sq == 0xFF {
 				continue
 			}
 			piece := pos.Board[sq]
-			kind := m.Mem.Main[labels["KINDTAB"]+uint16(piece&0x0F)]
-			// The four planes are contiguous 1536-byte blocks.
+			// Kind-major layout: ZKEYS + kind*512 holds the four
+			// 128-byte planes for that kind (white P..K = 0-5,
+			// black = 6-11).
+			kind := uint16(piece&7) - 1 + 6*uint16(piece>>3&1)
 			for p := range want {
-				want[p] ^= m.Mem.Main[zplane0+uint16(p)*1536+uint16(kind)*128+uint16(sq)]
+				want[p] ^= m.Mem.Main[zkeys+kind*512+uint16(p)*128+uint16(sq)]
 			}
 		}
 		if pos.Side != 0 {
