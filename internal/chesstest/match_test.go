@@ -87,6 +87,9 @@ func playGame(t *testing.T, depth byte, engineWhite bool, seed int64) int {
 // move is validated by the independent refchess implementation. Game
 // count via TORTURE_GAMES (default 10; the M2 gate run uses 100).
 func TestLegalityTorture(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: refereed games")
+	}
 	games := 10
 	if s := os.Getenv("TORTURE_GAMES"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil {

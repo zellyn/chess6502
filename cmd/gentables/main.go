@@ -10,6 +10,7 @@
 package main
 
 import (
+	"math/rand/v2"
 	"fmt"
 	"os"
 	"strings"
@@ -101,6 +102,7 @@ func main() {
 	emitInts(&b, "DIAGOFF", diagOffs)
 	emitInts(&b, "ORTHOOFF", orthoOffs)
 	emitPSQT(&b)
+	emitZobrist(&b)
 
 	if err := os.WriteFile("asm/tables.s", []byte(b.String()), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -172,6 +174,84 @@ func emitPSQT(b *strings.Builder) {
 		fmt.Fprintf(b, "%d", (p*32+12)/24)
 	}
 	b.WriteString("\n")
+}
+
+// emitZobrist writes 32-bit Zobrist keys as four byte-planes, each
+// [12][128] (kind-major: white P..K = kinds 0-5, black = 6-11, 0x88
+// squares), plus side-to-move, castling-rights, and ep-file keys, and
+// the lookup tables that turn a piece byte into plane pointers:
+// KINDTAB[piece&$0F] -> kind, ZPLLO[kind] -> pointer lo byte,
+// ZPLHI0..3[kind] -> pointer hi byte per plane.
+func emitZobrist(b *strings.Builder) {
+	rnd := rand.New(rand.NewPCG(0x6502c4e5, 0x0a11babe))
+	key := func() [4]byte {
+		v := rnd.Uint32()
+		return [4]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}
+	}
+
+	var planes [4][12 * 128]byte
+	for kind := range 12 {
+		for sq := range 128 {
+			if sq&0x88 != 0 {
+				continue
+			}
+			k := key()
+			for p := range 4 {
+				planes[p][kind*128+sq] = k[p]
+			}
+		}
+	}
+	names := []string{"ZPLANE0", "ZPLANE1", "ZPLANE2", "ZPLANE3"}
+	for p, name := range names {
+		b.WriteString("\n.align 256\n")
+		emit(b, name, planes[p][:])
+	}
+
+	// KINDTAB: piece&$0F -> kind (color*6 + type-1); $FF for invalid.
+	var kindTab [16]byte
+	for i := range kindTab {
+		kindTab[i] = 0xFF
+	}
+	for typ := 1; typ <= 6; typ++ {
+		kindTab[typ] = byte(typ - 1)
+		kindTab[8|typ] = byte(6 + typ - 1)
+	}
+	emit(b, "KINDTAB", kindTab[:])
+	// Plane pointer tables: block = kind*128 within each 1536-byte plane.
+	b.WriteString("ZPLLO:\n        .byte ")
+	for kind := range 12 {
+		if kind > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(b, "$%02X", (kind&1)*128)
+	}
+	b.WriteString("\n")
+	for p, name := range names {
+		fmt.Fprintf(b, "ZPLHI%d:\n        .byte ", p)
+		for kind := range 12 {
+			if kind > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(b, ">%s+%d", name, kind/2)
+		}
+		b.WriteString("\n")
+	}
+
+	stm := key()
+	fmt.Fprintf(b, "STMKEY:\n        .byte $%02X,$%02X,$%02X,$%02X\n",
+		stm[0], stm[1], stm[2], stm[3])
+	// Castling keys: one 4-byte key per rights nibble value.
+	b.WriteString("CASTKEYS:\n")
+	for range 16 {
+		k := key()
+		fmt.Fprintf(b, "        .byte $%02X,$%02X,$%02X,$%02X\n", k[0], k[1], k[2], k[3])
+	}
+	// EP keys: by file; plus EPNONE = 0 handled by skipping the xor.
+	b.WriteString("EPKEYS:\n")
+	for range 8 {
+		k := key()
+		fmt.Fprintf(b, "        .byte $%02X,$%02X,$%02X,$%02X\n", k[0], k[1], k[2], k[3])
+	}
 }
 
 func emitInts(b *strings.Builder, name string, offs []int) {

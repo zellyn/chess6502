@@ -124,6 +124,14 @@ make:
         sta UNDOPHASE,x
         lda HALFMOVE
         sta UNDOHALF,x
+        lda HASH0
+        sta HASHSTK0,x
+        lda HASH1
+        sta HASHSTK1,x
+        lda HASH2
+        sta HASHSTK2,x
+        lda HASH3
+        sta HASHSTK3,x
 .endif
         ldy FROM
         lda a:BOARD,y           ; force absolute: no lda zp,y mode exists
@@ -153,10 +161,13 @@ mkhavecap:
         lda a:BOARD,y           ; victim byte (0 if quiet move)
         sta UNDOCAP,x
         beq mknocap
-        ; remove victim: eval out, clear square, tombstone list slot
+        ; remove victim: hash+eval out, clear square, tombstone list slot
         pha
 .ifndef NOEVAL
-        jsr rempiece            ; A = victim, Y = capture square
+        jsr hashpiece           ; A = victim, Y = capture square (kept)
+        pla
+        pha
+        jsr rempiece
         ldx PLY
 .endif
         ldy UNDOCAPSQ,x
@@ -182,10 +193,12 @@ mkhmzero:
         lda #0
         sta HALFMOVE
 mkhmdone:
-        ; eval: remove the mover from its origin
+        ; hash+eval: remove the mover from its origin
         lda MVPIECE
         ldy FROM
-        jsr rempiece
+        jsr hashpiece
+        lda MVPIECE
+        jsr rempiece            ; hashpiece preserved Y = FROM
 .endif
         ; move the piece (promotion replaces the type bits)
         ldy FROM
@@ -208,7 +221,9 @@ mkplace:
 .ifndef NOEVAL
         lda CRTMP
         ldy TO
-        jsr addpiece
+        jsr hashpiece
+        lda CRTMP
+        jsr addpiece            ; hashpiece preserved Y = TO
 .endif
         lda CRTMP
         jsr slotof
@@ -241,7 +256,33 @@ mknocastle:
 mknodouble:
         lda #NOSQ
         sta EPSQ
-mkflip: lda SIDE
+mkflip:
+.ifndef NOEVAL
+        ; hash: castling-rights change, ep change, side to move
+        ldx PLY
+        lda UNDOCASTLE,x
+        cmp CASTLE
+        beq mknocch
+        jsr hashcastle          ; xor out the old rights
+        ldx PLY
+        lda CASTLE
+        jsr hashcastle          ; xor in the new
+mknocch:
+        ldx PLY
+        lda UNDOEP,x
+        cmp EPSQ
+        beq mknoech
+        cmp #NOSQ
+        beq :+
+        jsr hashep              ; xor out the old ep file
+:       lda EPSQ
+        cmp #NOSQ
+        beq mknoech
+        jsr hashep              ; xor in the new
+mknoech:
+        jsr hashstm
+.endif
+        lda SIDE
         eor #COLORMASK
         sta SIDE
         inc PLY
@@ -279,9 +320,13 @@ crgo:   sta GTO
         lda a:BOARD,y
         sta CRTMP
 .ifndef NOEVAL
-        jsr rempiece            ; A = rook byte, Y = from square
+        jsr hashpiece           ; A = rook byte, Y = from square (kept)
+        lda CRTMP
+        jsr rempiece
         lda CRTMP
         ldy GTO
+        jsr hashpiece
+        lda CRTMP
         jsr addpiece
 .endif
         ldy GTMP
@@ -363,6 +408,14 @@ unmake:
         sta PHASE
         lda UNDOHALF,x
         sta HALFMOVE
+        lda HASHSTK0,x
+        sta HASH0
+        lda HASHSTK1,x
+        sta HASH1
+        lda HASHSTK2,x
+        sta HASH2
+        lda HASHSTK3,x
+        sta HASH3
 .endif
         ; clear TO, put the original piece byte back on FROM
         ldy UNDOTO,x

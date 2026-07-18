@@ -100,6 +100,11 @@ PSQPIECE  = $D9         ; psqt: piece byte
 MULCNT    = $DA         ; multiply loop counter
 MAXDEPTH  = $DB         ; full-width search depth; qs beyond (poked by rig)
 GENCAPS   = $DC         ; movegen: nonzero = emit captures/ep/promos only
+HASH0     = $DD         ; 32-bit incremental Zobrist hash
+HASH1     = $DE
+HASH2     = $DF
+HASH3     = $E0
+ZPTR      = $E1         ; 16-bit: Zobrist plane pointer
 
 INF       = 32000
 MATE      = 30000
@@ -137,6 +142,10 @@ UNDOHALF   = $0B00
 LEGALCNT   = $0B20      ; legal moves found at this ply
 PASSNO     = $0B40      ; move-loop pass: 0 captures/promos, 1 quiets
 QSKIND     = $0B60      ; 0 = full-width (or evasion) node, 1 = qs captures-only
+HASHSTK0   = $0B80      ; hash of the position at each ply (saved by make;
+HASHSTK1   = $0BA0      ;  doubles as the unmake restore source and the
+HASHSTK2   = $0BC0      ;  repetition-scan history)
+HASHSTK3   = $0BE0
 
 MOVESTACK  = $0C00      ; 3 bytes/move (from,to,flags); through $1FFF
 MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this

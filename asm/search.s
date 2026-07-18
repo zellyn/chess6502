@@ -52,7 +52,74 @@ search:
         cmp #MAXPLY-1
         bcc :+
         jmp eval                ; hard ply cap: static eval
-:       ldy PLY
+:       lda PLY
+        beq sdrawend            ; root: no draw checks; a move is required
+        ; 50-move rule. (Nuance accepted: a mate delivered exactly on the
+        ; 100th halfmove is scored as a draw here.)
+        lda HALFMOVE
+        cmp #100
+        bcs sdraw
+        ; twofold repetition against the search path: only reachable
+        ; within the last HALFMOVE plies, same side to move (step 2)
+        cmp #4
+        bcc snorep
+        lda PLY
+        sec
+        sbc HALFMOVE
+        bcs :+
+        lda #0
+:       sta T2                  ; scan lower bound
+        lda PLY
+        sec
+        sbc #2
+        bcc snorep
+sreploop:
+        cmp T2
+        bcc snorep
+        tax
+        lda HASHSTK0,x
+        cmp HASH0
+        bne srepnext
+        lda HASHSTK1,x
+        cmp HASH1
+        bne srepnext
+        lda HASHSTK2,x
+        cmp HASH2
+        bne srepnext
+        lda HASHSTK3,x
+        cmp HASH3
+        bne srepnext
+        beq sdraw               ; repetition
+srepnext:
+        txa
+        sec
+        sbc #2
+        bcs sreploop
+snorep:
+        ; insufficient material: PHASE <= 1 and no pawns (covers KK,
+        ; KNK, KBK; same-color-bishops draws are the referee's problem)
+        lda PHASE
+        cmp #2
+        bcs sdrawend
+        ldx #31
+smdloop:
+        lda PIECESQ,x
+        cmp #NOSQ
+        beq smdnext
+        tay
+        lda a:BOARD,y
+        and #TYPEMASK
+        cmp #PAWN
+        beq sdrawend            ; a pawn exists: playable
+smdnext:
+        dex
+        bpl smdloop
+sdraw:  lda #0
+        sta SCORE
+        sta SCORE+1
+        rts
+sdrawend:
+        ldy PLY
         lda #0
         sta LEGALCNT,y
         sta PASSNO,y

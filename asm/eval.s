@@ -103,8 +103,82 @@ psqsub: sec
         rts
 
 ; ---------------------------------------------------------------
-; evalinit: recompute accumulators from the board (root setup, and a
-; debug cross-check against the incremental path).
+; hashpiece: xor the Zobrist key for (A = piece byte, Y = square) into
+; HASH0-3. Y is preserved. Clobbers A,X.
+; ---------------------------------------------------------------
+hashpiece:
+        and #$0F
+        tax
+        lda KINDTAB,x
+        tax                     ; kind 0-11
+        lda ZPLLO,x
+        sta ZPTR
+        lda ZPLHI0,x
+        sta ZPTR+1
+        lda (ZPTR),y
+        eor HASH0
+        sta HASH0
+        lda ZPLHI1,x
+        sta ZPTR+1
+        lda (ZPTR),y
+        eor HASH1
+        sta HASH1
+        lda ZPLHI2,x
+        sta ZPTR+1
+        lda (ZPTR),y
+        eor HASH2
+        sta HASH2
+        lda ZPLHI3,x
+        sta ZPTR+1
+        lda (ZPTR),y
+        eor HASH3
+        sta HASH3
+        rts
+
+; hashcastle: xor CASTKEYS[A] into HASH0-3. Clobbers A,X,Y.
+hashcastle:
+        asl
+        asl
+        tay
+        ldx #0
+hcloop: lda CASTKEYS,y
+        eor HASH0,x
+        sta HASH0,x
+        iny
+        inx
+        cpx #4
+        bne hcloop
+        rts
+
+; hashep: xor EPKEYS[file of A] into HASH0-3 (A = ep square, not NOSQ).
+hashep:
+        and #$07
+        asl
+        asl
+        tay
+        ldx #0
+heloop: lda EPKEYS,y
+        eor HASH0,x
+        sta HASH0,x
+        iny
+        inx
+        cpx #4
+        bne heloop
+        rts
+
+; hashstm: xor the side-to-move key. Clobbers A,X.
+hashstm:
+        ldx #3
+hsloop: lda STMKEY,x
+        eor HASH0,x
+        sta HASH0,x
+        dex
+        bpl hsloop
+        rts
+
+; ---------------------------------------------------------------
+; evalinit: recompute accumulators and the Zobrist hash from the board
+; (root setup, and a debug cross-check against the incremental path).
 ; ---------------------------------------------------------------
 evalinit:
         lda #0
@@ -113,6 +187,10 @@ evalinit:
         sta EGSCORE
         sta EGSCORE+1
         sta PHASE
+        sta HASH0
+        sta HASH1
+        sta HASH2
+        sta HASH3
         sta PSP0                ; pointer lo bytes are always 0
         sta PSP1
         sta GSLOT
@@ -124,12 +202,27 @@ eviloop:
         tay
         lda a:BOARD,y
         jsr addpiece
+        ldy GSLOT
+        lda PIECESQ,y
+        tay
+        lda a:BOARD,y
+        jsr hashpiece
 evinext:
         inc GSLOT
         lda GSLOT
         cmp #32
         bne eviloop
-        rts
+        ; side to move, castling rights, ep square
+        lda SIDE
+        beq :+
+        jsr hashstm
+:       lda CASTLE
+        jsr hashcastle
+        lda EPSQ
+        cmp #NOSQ
+        beq :+
+        jsr hashep
+:       rts
 
 ; ---------------------------------------------------------------
 ; eval: SCORE = tapered eval from the side to move's point of view,
