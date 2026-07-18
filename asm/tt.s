@@ -12,20 +12,17 @@
 
 ; ---------------------------------------------------------------
 ; ttaddr: TTPTR = TTBASE + (12-bit index from HASH0/HASH1) * 8.
+; Table-driven: TTHITAB fills bits 3-6, SHR5TAB bits 0-2 (disjoint,
+; so ora); the final +>TTBASE must stay adc (base $02 overlaps).
+; Clobbers A,X,Y.
 ; ---------------------------------------------------------------
 ttaddr:
-        lda HASH1
-        and #$0F
-        sta TTPTR+1
-        lda HASH0
-        asl
-        rol TTPTR+1
-        asl
-        rol TTPTR+1
-        asl
-        rol TTPTR+1
+        ldx HASH0
+        lda SHL3TAB,x
         sta TTPTR
-        lda TTPTR+1
+        ldy HASH1
+        lda TTHITAB,y
+        ora SHR5TAB,x
         clc
         adc #>TTBASE
         sta TTPTR+1
@@ -130,11 +127,31 @@ tsgo:   lda HASH1
         sta TTENTRY+2
         jsr ttaddr
         sta $C005               ; RAMWRT on: stores land in aux
+        ; unrolled: entries are 8-aligned, (TTPTR),y never crosses
         ldy #7
-tsloop: lda TTENTRY,y
+        lda TTENTRY+7
         sta (TTPTR),y
         dey
-        bpl tsloop
+        lda TTENTRY+6
+        sta (TTPTR),y
+        dey
+        lda TTENTRY+5
+        sta (TTPTR),y
+        dey
+        lda TTENTRY+4
+        sta (TTPTR),y
+        dey
+        lda TTENTRY+3
+        sta (TTPTR),y
+        dey
+        lda TTENTRY+2
+        sta (TTPTR),y
+        dey
+        lda TTENTRY+1
+        sta (TTPTR),y
+        dey
+        lda TTENTRY
+        sta (TTPTR),y
         sta $C004               ; RAMWRT off
         rts
 
@@ -144,11 +161,31 @@ tsloop: lda TTENTRY,y
 ; LC RAM because RAMRD switches all $0200-$BFFF reads including fetches.
 ttread:
         sta $C003               ; RAMRD on
+        ; unrolled: entries are 8-aligned, (TTPTR),y never crosses
         ldy #7
-trloop: lda (TTPTR),y
-        sta TTENTRY,y
+        lda (TTPTR),y
+        sta TTENTRY+7
         dey
-        bpl trloop
+        lda (TTPTR),y
+        sta TTENTRY+6
+        dey
+        lda (TTPTR),y
+        sta TTENTRY+5
+        dey
+        lda (TTPTR),y
+        sta TTENTRY+4
+        dey
+        lda (TTPTR),y
+        sta TTENTRY+3
+        dey
+        lda (TTPTR),y
+        sta TTENTRY+2
+        dey
+        lda (TTPTR),y
+        sta TTENTRY+1
+        dey
+        lda (TTPTR),y
+        sta TTENTRY
         sta $C002               ; RAMRD off
         rts
 

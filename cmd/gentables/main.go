@@ -107,6 +107,22 @@ func main() {
 	}
 	b.WriteString("\n.align 256\n")
 	emit(&b, "SLOTTAB", slotTab[:])
+
+	// TT addressing: TTPTR = TTBASE + index*8, index = (HASH1&0x0F)<<8 | HASH0.
+	// SHL3TAB/SHR5TAB split HASH0*8 across the pointer bytes; TTHITAB puts
+	// HASH1's nibble in bits 3-6. Page-aligned so lda abs,x never crosses.
+	var shl3Tab, shr5Tab, ttHiTab [256]byte
+	for i := range shl3Tab {
+		shl3Tab[i] = byte(i << 3)
+		shr5Tab[i] = byte(i >> 5)
+		ttHiTab[i] = byte((i & 0x0F) << 3)
+	}
+	b.WriteString("\n.align 256\n")
+	emit(&b, "SHL3TAB", shl3Tab[:])
+	b.WriteString("\n.align 256\n")
+	emit(&b, "SHR5TAB", shr5Tab[:])
+	b.WriteString("\n.align 256\n")
+	emit(&b, "TTHITAB", ttHiTab[:])
 	b.WriteString("\n.align 128\n")
 	emit(&b, "CASTLEMASK", castleMask[:])
 	b.WriteString("\n")
