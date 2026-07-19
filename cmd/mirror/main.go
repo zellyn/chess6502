@@ -22,6 +22,8 @@ func main() {
 	switch os.Args[1] {
 	case "nodes":
 		nodes(os.Args[2:])
+	case "gen":
+		gen(os.Args[2:])
 	case "tune":
 		tune(os.Args[2:])
 	case "match":
@@ -34,7 +36,8 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: mirror <command> [flags]
   nodes   fixed-depth node counts by feature mask
-  tune    generate self-play data and Texel-tune pstruct weights
+  gen     self-play a chunk of games, appending labeled rows to -data
+  tune    Texel-tune pstruct weights from a -data file
   match   self-play match between weight/feature configurations`)
 	os.Exit(2)
 }
@@ -57,33 +60,42 @@ func nodes(args []string) {
 	}
 }
 
-func tune(args []string) {
-	fs := flag.NewFlagSet("tune", flag.ExitOnError)
-	depth := fs.Int("depth", 5, "self-play depth for data generation")
-	minSamples := fs.Int("samples", 100_000, "minimum training positions")
+func gen(args []string) {
+	fs := flag.NewFlagSet("gen", flag.ExitOnError)
+	depth := fs.Int("depth", 5, "self-play depth")
+	games := fs.Int("games", 300, "games this chunk")
 	workers := fs.Int("workers", runtime.NumCPU()-2, "parallel games")
-	seed := fs.Uint64("seed", 6502, "RNG seed")
-	openings := fs.Int("openings", 200, "generated opening lines")
+	seed := fs.Uint64("seed", 6502, "RNG seed (vary per chunk)")
+	openings := fs.Int("openings", 300, "generated opening lines")
+	data := fs.String("data", "texel.rows", "row file to append to")
 	fs.Parse(args)
 
-	fmt.Printf("generating %d balanced openings...\n", *openings)
 	lines, err := mirror.GenOpenings(sprt.Openings, *openings, *seed)
 	check(err)
-
-	fmt.Printf("self-play data generation: depth %d, target %d samples, %d workers\n",
-		*depth, *minSamples, *workers)
 	start := time.Now()
 	samples, err := mirror.GenerateData(lines, mirror.DefaultWeights, *depth,
-		*minSamples, *workers, *seed, func(games, n int) {
+		*games, *workers, *seed, func(games, n int) {
 			fmt.Printf("  %d games, %d samples (%v)\n", games, n, time.Since(start).Round(time.Second))
 		})
 	check(err)
-	fmt.Printf("collected %d samples in %v\n", len(samples), time.Since(start).Round(time.Second))
+	check(mirror.AppendRows(*data, mirror.SampleRows(samples)))
+	fmt.Printf("chunk done: %d games, %d samples appended to %s in %v\n",
+		*games, len(samples), *data, time.Since(start).Round(time.Second))
+}
 
-	k := mirror.FitK(samples, mirror.DefaultWeights)
+func tune(args []string) {
+	fs := flag.NewFlagSet("tune", flag.ExitOnError)
+	data := fs.String("data", "texel.rows", "row file from gen")
+	fs.Parse(args)
+
+	rows, err := mirror.LoadRows(*data)
+	check(err)
+	fmt.Printf("loaded %d rows from %s\n", len(rows), *data)
+
+	k := mirror.FitK(rows, mirror.DefaultWeights)
 	fmt.Printf("fitted sigmoid K = %.2f\n", k)
 
-	tuned, before, after := mirror.Tune(samples, mirror.DefaultWeights, k,
+	tuned, before, after := mirror.Tune(rows, mirror.DefaultWeights, k,
 		func(step string, loss float64) { fmt.Printf("  %s: loss %.6f\n", step, loss) })
 	fmt.Printf("loss: %.6f -> %.6f\n", before, after)
 	fmt.Printf("tuned weights: %+v\n", tuned)

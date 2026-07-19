@@ -21,9 +21,18 @@ var DefaultWeights = Weights{
 	OpenFile: 10,
 }
 
-// TunedWeights is the latest Texel-tuned set (cmd/mirror tune output;
-// starts equal to DefaultWeights until a tuning run lands).
-var TunedWeights = DefaultWeights
+// TunedWeights is the Texel-tuned set: 101,202 quiet positions from
+// 3,340 depth-5 self-play games (2026-07-18, sigmoid K=0.80, loss
+// 0.100471 -> 0.100142). Notable vs DefaultWeights: passed-pawn
+// bonuses roughly doubled through the middle ranks, king-shield and
+// open-file terms shrunk to near-nothing.
+var TunedWeights = Weights{
+	Doubled:  12,
+	Isolated: 10,
+	Passed:   [8]int{0, 18, 0, 33, 62, 69, 28, 0},
+	Shield:   3,
+	OpenFile: 4,
+}
 
 // pawnterm recomputes PStruct (white POV), mirroring asm pawnterm:
 // doubled/isolated/passed pawns and the minimal king shield.

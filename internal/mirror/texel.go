@@ -1,22 +1,23 @@
 package mirror
 
 import (
+	"bufio"
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
 	"sync"
 )
 
-// GenerateData plays fixed-depth self-play games (all features on,
-// dither on, both sides using weights w) and collects quiet labeled
-// positions until at least minSamples are gathered.
-func GenerateData(openings [][]string, w Weights, depth, minSamples, workers int, seed uint64, progress func(games, samples int)) ([]Sample, error) {
+// GenerateData plays a fixed number of fixed-depth self-play games
+// (all features on, dither on, both sides using weights w) and
+// collects quiet labeled positions.
+func GenerateData(openings [][]string, w Weights, depth, games, workers int, seed uint64, progress func(games, samples int)) ([]Sample, error) {
 	cfg := PlayerCfg{Features: FtNull | FtKiller | FtFutil | FtPstruct, Weights: w, Depth: depth}
 	var mu sync.Mutex
 	var samples []Sample
-	games := 0
+	next, done := 0, 0
 	var firstErr error
-	stop := false
 
 	var wg sync.WaitGroup
 	if workers <= 0 {
@@ -29,12 +30,12 @@ func GenerateData(openings [][]string, w Weights, depth, minSamples, workers int
 			rnd := rand.New(rand.NewPCG(seed^0xda7a6e2, uint64(wk)*0x9e3779b97f4a7c15+1))
 			for {
 				mu.Lock()
-				if stop || firstErr != nil {
+				if next >= games || firstErr != nil {
 					mu.Unlock()
 					return
 				}
-				g := games
-				games++
+				g := next
+				next++
 				mu.Unlock()
 
 				opening := openings[g%len(openings)]
@@ -49,11 +50,9 @@ func GenerateData(openings [][]string, w Weights, depth, minSamples, workers int
 					return
 				}
 				samples = append(samples, rec.Samples...)
-				if progress != nil && games%50 == 0 {
-					progress(games, len(samples))
-				}
-				if len(samples) >= minSamples {
-					stop = true
+				done++
+				if progress != nil && done%50 == 0 {
+					progress(done, len(samples))
 				}
 				mu.Unlock()
 			}
@@ -61,6 +60,68 @@ func GenerateData(openings [][]string, w Weights, depth, minSamples, workers int
 	}
 	wg.Wait()
 	return samples, firstErr
+}
+
+// Row is one serialized training position: the fixed eval base, the
+// 10-element pawn-structure feature vector (weightsVec layout), and
+// the game outcome.
+type Row struct {
+	Base, R float64
+	F       [10]float64
+}
+
+// SampleRows converts collected samples to tuner rows.
+func SampleRows(samples []Sample) []Row {
+	rows := make([]Row, len(samples))
+	for i := range samples {
+		rows[i] = Row{Base: float64(samples[i].Base), R: samples[i].R, F: featVec(&samples[i].F)}
+	}
+	return rows
+}
+
+// AppendRows appends rows to a data file (one "R base f0..f9" line
+// each), so generation can run in restartable chunks.
+func AppendRows(path string, rows []Row) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriter(f)
+	for _, r := range rows {
+		fmt.Fprintf(w, "%g %g", r.R, r.Base)
+		for _, x := range r.F {
+			fmt.Fprintf(w, " %g", x)
+		}
+		fmt.Fprintln(w)
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// LoadRows reads a data file written by AppendRows.
+func LoadRows(path string) ([]Row, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var rows []Row
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var r Row
+		vals := []any{&r.R, &r.Base}
+		for i := range r.F {
+			vals = append(vals, &r.F[i])
+		}
+		if _, err := fmt.Sscan(sc.Text(), vals...); err != nil {
+			return nil, fmt.Errorf("bad row %q: %w", sc.Text(), err)
+		}
+		rows = append(rows, r)
+	}
+	return rows, sc.Err()
 }
 
 // weightsVec flattens the tunable parameters: doubled, isolated,
@@ -119,31 +180,27 @@ func sigmoid(evalCp, k float64) float64 {
 }
 
 // texelLoss is the mean squared error of the logistic prediction over
-// the samples for parameter vector v.
-func texelLoss(samples []Sample, feats [][10]float64, v [10]float64, k float64) float64 {
+// the rows for parameter vector v.
+func texelLoss(rows []Row, v [10]float64, k float64) float64 {
 	sum := 0.0
-	for i := range samples {
-		eval := float64(samples[i].Base)
-		for j, fj := range feats[i] {
+	for i := range rows {
+		eval := rows[i].Base
+		for j, fj := range rows[i].F {
 			eval += fj * v[j]
 		}
-		d := samples[i].R - sigmoid(eval, k)
+		d := rows[i].R - sigmoid(eval, k)
 		sum += d * d
 	}
-	return sum / float64(len(samples))
+	return sum / float64(len(rows))
 }
 
 // FitK finds the sigmoid scale minimizing the loss with the given
-// weights fixed (coarse grid + refinement).
-func FitK(samples []Sample, w Weights) float64 {
-	feats := make([][10]float64, len(samples))
-	for i := range samples {
-		feats[i] = featVec(&samples[i].F)
-	}
+// weights fixed.
+func FitK(rows []Row, w Weights) float64 {
 	v := weightsVec(w)
 	bestK, bestL := 1.0, math.Inf(1)
-	for k := 0.4; k <= 2.4; k += 0.05 {
-		if l := texelLoss(samples, feats, v, k); l < bestL {
+	for k := 0.2; k <= 2.4; k += 0.05 {
+		if l := texelLoss(rows, v, k); l < bestL {
 			bestK, bestL = k, l
 		}
 	}
@@ -153,13 +210,9 @@ func FitK(samples []Sample, w Weights) float64 {
 // Tune runs multi-scale integer coordinate descent on the pawn-
 // structure weights, PeSTO fixed. Returns the tuned weights and the
 // loss before/after.
-func Tune(samples []Sample, start Weights, k float64, progress func(step string, loss float64)) (Weights, float64, float64) {
-	feats := make([][10]float64, len(samples))
-	for i := range samples {
-		feats[i] = featVec(&samples[i].F)
-	}
+func Tune(rows []Row, start Weights, k float64, progress func(step string, loss float64)) (Weights, float64, float64) {
 	v := weightsVec(start)
-	lossBefore := texelLoss(samples, feats, v, k)
+	lossBefore := texelLoss(rows, v, k)
 	best := lossBefore
 	for _, step := range []float64{32, 16, 8, 4, 2, 1} {
 		improved := true
@@ -178,7 +231,7 @@ func Tune(samples []Sample, start Weights, k float64, progress func(step string,
 					if cand[j] == v[j] {
 						continue
 					}
-					if l := texelLoss(samples, feats, cand, k); l < best {
+					if l := texelLoss(rows, cand, k); l < best {
 						v, best = cand, l
 						improved = true
 					}

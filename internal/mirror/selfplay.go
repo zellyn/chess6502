@@ -55,6 +55,8 @@ func PlayGame(white, black PlayerCfg, opening []string, rnd *rand.Rand, collect 
 	rec := GameRec{}
 	seen := map[uint32]int{}
 	var pending []Sample // samples awaiting the game result
+	winStreak, drawStreak := 0, 0
+	collectGate := 0
 
 	for ply := 0; ; ply++ {
 		eng := we
@@ -83,17 +85,22 @@ func PlayGame(white, black PlayerCfg, opening []string, rnd *rand.Rand, collect 
 		}
 
 		if collect && ply >= 8 && !inChk && isQuiet(eng) {
-			base := eng.Pos.taperedWhite()
-			if gp.Side == 0 {
-				base += Tempo
-			} else {
-				base -= Tempo
+			// Every 2nd qualifying position: in-game samples are
+			// heavily correlated, so favor game count over density.
+			collectGate++
+			if collectGate%2 == 0 {
+				base := eng.Pos.taperedWhite()
+				if gp.Side == 0 {
+					base += Tempo
+				} else {
+					base -= Tempo
+				}
+				pending = append(pending, Sample{Base: base, F: *extractPawnFeatures(&eng.Pos)})
 			}
-			pending = append(pending, Sample{Base: base, F: *extractPawnFeatures(&eng.Pos)})
 		}
 
 		eng.Seed = byte(rnd.IntN(255)) + 1 // dither on
-		best, _ := eng.SearchFixed(cfg.Depth)
+		best, score := eng.SearchFixed(cfg.Depth)
 		if best.From == NoSq {
 			if inChk { // checkmate: side to move loses
 				if gp.Side == 0 {
@@ -113,6 +120,44 @@ func PlayGame(white, black PlayerCfg, opening []string, rnd *rand.Rand, collect 
 		gp = eng.Pos
 		gp.Ply = 0
 		rec.Plies++
+
+		// Score adjudication (cutechess-style, for tuning/match speed;
+		// the real emulated-engine rig plays to the referee's rules).
+		scoreW := score
+		if eng.Pos.Side == 0 {
+			scoreW = -score // the mover was black
+		}
+		switch {
+		case scoreW >= 600:
+			if winStreak < 0 {
+				winStreak = 0
+			}
+			winStreak++
+		case scoreW <= -600:
+			if winStreak > 0 {
+				winStreak = 0
+			}
+			winStreak--
+		default:
+			winStreak = 0
+		}
+		if winStreak >= 6 || winStreak <= -6 {
+			if winStreak > 0 {
+				rec.Result = 1
+			}
+			rec.Reason = "adjudicated"
+			break
+		}
+		if ply >= 140 && scoreW >= -15 && scoreW <= 15 {
+			drawStreak++
+			if drawStreak >= 10 {
+				rec.Result = 0.5
+				rec.Reason = "adjudicated-draw"
+				break
+			}
+		} else {
+			drawStreak = 0
+		}
 	}
 	for i := range pending {
 		pending[i].R = rec.Result
