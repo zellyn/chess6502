@@ -399,39 +399,28 @@ heloop: lda EPKEYS,y
 ; ---------------------------------------------------------------
 ; pawnterm: recompute PSTRUCT (white POV): doubled/isolated/passed
 ; pawns and a minimal king shield. Called by make when PDIRTY is set
-; (a pawn or king changed) and by evalinit; ~800-1200 cycles, but pawn/
-; king events are a small fraction of makes. Uses $0200-$022F scratch.
+; (a pawn or king changed) and by evalinit. Uses $0200-$020F scratch.
 ;
-; Terms (v1, to be SPRT-tuned): doubled -12 per extra pawn on a file;
-; isolated -12; passed bonus by rank; king shield +8 per own pawn on
-; the three files around a back-rank king (max 3 counted via files),
-; -10 for an open own file under the king.
+; Per file, one byte of rank-occupancy bits per side; the derived
+; per-file terms come from gentables lookups on that byte (RANKBIT/
+; WBLOCKM/WPASSB/BBLOCKM/BPASSB - the passed-bonus weights live in
+; cmd/gentables now). Semantics are term-exact with the previous
+; count/min/max implementation, gated by TestPStructParity:
+; doubled = flat -12 for any count >= 2 (NOT per extra pawn);
+; blocked uses >= for white and <= for black (adjacent same-rank
+; enemy pawns block), so WBLOCKM includes the pawn's own rank bit.
 ; ---------------------------------------------------------------
-PWCNT  = $0200          ; white pawns per file (8)
-PBCNT  = $0208          ; black pawns per file (8)
-PWMAX  = $0210          ; highest white pawn rank per file (0 if none)
-PBMAX  = $0218          ; highest black pawn rank per file (0 if none)
-PWMIN  = $0220          ; lowest white pawn rank per file (15 if none)
-PBMIN  = $0228          ; lowest black pawn rank per file (15 if none)
-
-PASSEDBONUS:
-        .byte 0, 8, 12, 18, 28, 45, 70, 0
+PWBITS = $0200          ; white pawn rank-occupancy bits per file (8)
+PBBITS = $0208          ; black pawn rank-occupancy bits per file (8)
 
 pawnterm:
         lda #0
         sta PDIRTY
-        sta PSTRUCT
-        sta PSTRUCT+1
-        ; clear the per-file tables
+        sta T0                  ; T0/T1: signed accumulator
+        sta T1
         ldx #7
-ptclr:  sta PWCNT,x
-        sta PBCNT,x
-        sta PWMAX,x
-        sta PBMAX,x
-        lda #15
-        sta PWMIN,x
-        sta PBMIN,x
-        lda #0
+ptclr:  sta PWBITS,x
+        sta PBBITS,x
         dex
         bpl ptclr
         ; scan the piece lists for pawns
@@ -444,99 +433,58 @@ ptscan: lda PIECESQ,x
         and #TYPEMASK
         cmp #PAWN
         bne ptnext
+        lda RANKBIT,y           ; 1 << rank
+        sta EVTMP
         tya
         and #$07
-        sta EVTMP               ; file
-        tya
-        lsr
-        lsr
-        lsr
-        lsr
-        sta MULCNT              ; rank
+        tay                     ; Y = file
+        lda EVTMP
         cpx #16
         bcs ptblack
-        ldy EVTMP
-        lda PWCNT,y
-        clc
-        adc #1
-        sta PWCNT,y
-        lda MULCNT
-        cmp PWMAX,y
-        bcc :+
-        sta PWMAX,y
-:       lda MULCNT
-        cmp PWMIN,y
-        bcs ptnext
-        sta PWMIN,y
-        jmp ptnext
+        ora PWBITS,y
+        sta PWBITS,y
+        bcc ptnext              ; always (cpx cleared carry above;
+                                ;  ora/sta leave it untouched)
 ptblack:
-        ldy EVTMP
-        lda PBCNT,y
-        clc
-        adc #1
-        sta PBCNT,y
-        lda MULCNT
-        cmp PBMAX,y
-        bcc :+
-        sta PBMAX,y
-:       lda MULCNT
-        cmp PBMIN,y
-        bcs ptnext
-        sta PBMIN,y
+        ora PBBITS,y
+        sta PBBITS,y
 ptnext: dex
         bpl ptscan
 
-        ; per-file terms into PSTRUCT (T0/T1 as signed accumulator)
-        lda #0
-        sta T0
-        sta T1
+        ; per-file terms (helpers preserve X and Y)
         ldx #7
-ptfile: ; doubled: -12 per extra pawn (white subtracts, black adds)
-        lda PWCNT,x
-        beq ptwd0
+ptfile: lda PWBITS,x
+        beq ptwd0               ; no white pawns on this file
+        tay                     ; Y = own-file bits, kept for lookups
         sec
         sbc #1
-        beq ptwiso
+        and PWBITS,x
+        beq :+                  ; bits & (bits-1): doubled iff nonzero
         jsr ptsub12
-ptwiso: ; isolated white pawn(s): neighbors empty
-        jsr ptneighw
-        bne ptwpass
+:       jsr ptneighw            ; isolated: no own pawns on neighbors
+        bne :+
         jsr ptsub12
-ptwpass:
-        ; white passed pawn (use the most advanced on the file):
-        ; no black pawn strictly ahead on x-1, x, x+1
-        lda PWMAX,x
-        sta EVTMP               ; r
-        jsr ptbmax3             ; A = max black rank on x-1..x+1
-        cmp EVTMP
-        bcs ptwd0               ; a blocker at rank > r ... (>= r is
-                                ;  conservative: adjacent same-rank
-                                ;  enemy pawns still guard the path)
-        ldy EVTMP
-        lda PASSEDBONUS,y
+:       jsr ptorb3              ; A = black bits on files x-1..x+1
+        and WBLOCKM,y           ; any black pawn at rank >= our best?
+        bne ptwd0
+        lda WPASSB,y            ; passed: bonus by the best pawn's rank
         jsr ptadda
-ptwd0:  ; black side, mirrored (ranks flipped: advancement = low rank)
-        lda PBCNT,x
+ptwd0:  ; black side, mirrored (advancement = low rank)
+        lda PBBITS,x
         beq ptnextf
+        tay
         sec
         sbc #1
-        beq ptbiso
+        and PBBITS,x
+        beq :+
         jsr ptadd12
-ptbiso: jsr ptneighb
-        bne ptbpass
+:       jsr ptneighb
+        bne :+
         jsr ptadd12
-ptbpass:
-        lda PBMIN,x
-        sta EVTMP
-        jsr ptwmin3             ; A = min white rank on x-1..x+1
-        cmp EVTMP
-        beq ptnextf
-        bcc ptnextf             ; a white blocker at rank < r
-        lda #7
-        sec
-        sbc EVTMP               ; black advancement = 7 - rank
-        tay
-        lda PASSEDBONUS,y
+:       jsr ptorw3
+        and BBLOCKM,y
+        bne ptnextf
+        lda BPASSB,y
         jsr ptsuba
 ptnextf:
         dex
@@ -573,10 +521,10 @@ ptadda: clc                     ; A (unsigned small) added
         bcc :+
         inc T1
 :       rts
-ptsuba: sta EVTMP
-        sec
+ptsuba: sta MULCNT              ; NOT EVTMP: the king-shield loops keep
+        sec                     ;  the king file there across calls
         lda T0
-        sbc EVTMP
+        sbc MULCNT
         sta T0
         bcs :+
         dec T1
@@ -588,53 +536,49 @@ ptsub12:
         lda #12
         bne ptsuba              ; always
 
-; ptneighw/b: Z set if both neighbor files have no own pawns
+; ptneighw/b: Z set if both neighbor files have no own pawns.
+; The final ora #0 is load-bearing: on the file-h path the last
+; flag-setting op would otherwise be cpx #7 (Z set!), which mis-
+; flagged h-file pawns as isolated in the count-based version.
 ptneighw:
         lda #0
         cpx #0
         beq :+
-        ora PWCNT-1,x
+        ora PWBITS-1,x
 :       cpx #7
         beq :+
-        ora PWCNT+1,x
-:       rts
+        ora PWBITS+1,x
+:       ora #0
+        rts
 ptneighb:
         lda #0
         cpx #0
         beq :+
-        ora PBCNT-1,x
+        ora PBBITS-1,x
 :       cpx #7
         beq :+
-        ora PBCNT+1,x
-:       rts
+        ora PBBITS+1,x
+:       ora #0
+        rts
 
-; ptbmax3: A = max(PBMAX[x-1], PBMAX[x], PBMAX[x+1])
-ptbmax3:
-        lda PBMAX,x
+; ptorb3/ptorw3: A = OR of that side's bits on files x-1, x, x+1
+ptorb3:
+        lda PBBITS,x
         cpx #0
         beq :+
-        cmp PBMAX-1,x
-        bcs :+
-        lda PBMAX-1,x
+        ora PBBITS-1,x
 :       cpx #7
         beq :+
-        cmp PBMAX+1,x
-        bcs :+
-        lda PBMAX+1,x
+        ora PBBITS+1,x
 :       rts
-; ptwmin3: A = min(PWMIN[x-1], PWMIN[x], PWMIN[x+1])
-ptwmin3:
-        lda PWMIN,x
+ptorw3:
+        lda PWBITS,x
         cpx #0
         beq :+
-        cmp PWMIN-1,x
-        bcc :+
-        lda PWMIN-1,x
+        ora PWBITS-1,x
 :       cpx #7
         beq :+
-        cmp PWMIN+1,x
-        bcc :+
-        lda PWMIN+1,x
+        ora PWBITS+1,x
 :       rts
 
 ; ptshieldw/b: A = king file; +8 per shielded file, -10 for an open
@@ -642,25 +586,25 @@ ptwmin3:
 ptshieldw:
         sta EVTMP
         tay
-        lda PWCNT,y
+        lda PWBITS,y
         beq :+
         lda #8
         jsr ptadda
 :       ldy EVTMP
         beq :+                  ; file a: no left neighbor
-        lda PWCNT-1,y
+        lda PWBITS-1,y
         beq :+
         lda #8
         jsr ptadda
 :       ldy EVTMP
         cpy #7
         beq :+
-        lda PWCNT+1,y
+        lda PWBITS+1,y
         beq :+
         lda #8
         jsr ptadda
 :       ldy EVTMP
-        lda PWCNT,y
+        lda PWBITS,y
         bne :+
         lda #10                 ; open file under the king
         jsr ptsuba
@@ -668,25 +612,25 @@ ptshieldw:
 ptshieldb:
         sta EVTMP
         tay
-        lda PBCNT,y
+        lda PBBITS,y
         beq :+
         lda #8
         jsr ptsuba
 :       ldy EVTMP
         beq :+
-        lda PBCNT-1,y
+        lda PBBITS-1,y
         beq :+
         lda #8
         jsr ptsuba
 :       ldy EVTMP
         cpy #7
         beq :+
-        lda PBCNT+1,y
+        lda PBBITS+1,y
         beq :+
         lda #8
         jsr ptsuba
 :       ldy EVTMP
-        lda PBCNT,y
+        lda PBBITS,y
         bne :+
         lda #10
         jsr ptadda

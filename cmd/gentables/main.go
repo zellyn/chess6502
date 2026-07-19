@@ -122,6 +122,50 @@ func main() {
 	typeAtk2[8|1] = atkBPawn
 	emit(&b, "TYPEATK2", typeAtk2[:])
 
+	// Pawn-structure tables (pawnterm's rank-bitmask form). Per file,
+	// pawnterm builds an 8-bit mask of occupied ranks; these tables
+	// turn one mask into the derived quantities directly:
+	//   RANKBIT[sq]   = 1 << rank (0x88-indexed board square)
+	//   WBLOCKM[bits] = ranks >= the most advanced white pawn (its own
+	//                   rank included: an adjacent same-rank enemy pawn
+	//                   blocks, matching the old >= compare)
+	//   WPASSB[bits]  = PASSEDBONUS[rank of most advanced white pawn]
+	//   BBLOCKM[bits] = ranks <= the most advanced black pawn (ditto <=)
+	//   BPASSB[bits]  = PASSEDBONUS[7 - that rank]
+	// The passed-pawn bonus weights live HERE now (Texel tuning slots
+	// its values in and regenerates).
+	passedBonus := []int{0, 8, 12, 18, 28, 45, 70, 0}
+	var rankBit [128]byte
+	for sq := range rankBit {
+		if sq&0x88 == 0 {
+			rankBit[sq] = 1 << (sq >> 4)
+		}
+	}
+	var wBlockM, wPassB, bBlockM, bPassB [256]byte
+	for bits := 1; bits < 256; bits++ {
+		hi := 7
+		for bits&(1<<hi) == 0 {
+			hi--
+		}
+		lo := 0
+		for bits&(1<<lo) == 0 {
+			lo++
+		}
+		wBlockM[bits] = byte(0xFF << hi)
+		wPassB[bits] = byte(passedBonus[hi])
+		bBlockM[bits] = byte(1<<(lo+1) - 1)
+		bPassB[bits] = byte(passedBonus[7-lo])
+	}
+	b.WriteString("\n.align 256\n")
+	emit(&b, "RANKBIT", rankBit[:])
+	emit(&b, "WBLOCKM", wBlockM[:])
+	b.WriteString("\n.align 256\n")
+	emit(&b, "WPASSB", wPassB[:])
+	b.WriteString("\n.align 256\n")
+	emit(&b, "BBLOCKM", bBlockM[:])
+	b.WriteString("\n.align 256\n")
+	emit(&b, "BPASSB", bPassB[:])
+
 	// TT addressing: TTPTR = TTBASE + index*8, index = (HASH1&0x0F)<<8 | HASH0.
 	// SHL3TAB/SHR5TAB split HASH0*8 across the pointer bytes; TTHITAB puts
 	// HASH1's nibble in bits 3-6. Page-aligned so lda abs,x never crosses.
