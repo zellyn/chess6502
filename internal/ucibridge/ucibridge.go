@@ -43,10 +43,17 @@ type Bridge struct {
 	// hardware build will seed this from input timing instead).
 	Dither bool
 
-	pos  *refchess.Position
-	aux  []byte // carried-over aux bank (TT state); nil until first move
-	rnd  func() byte
-	info string // "info depth ... score cp ..." from the last think
+	// Banked enables chess-clock banking: unused per-move cycles carry
+	// forward, and each move spends base + bank/8 (chesstest.BankedClock).
+	// Only meaningful with a per-move budget (FixedBudgetMs/movetime);
+	// fixed-depth mode ignores it.
+	Banked bool
+
+	pos   *refchess.Position
+	aux   []byte // carried-over aux bank (TT state); nil until first move
+	rnd   func() byte
+	info  string // "info depth ... score cp ..." from the last think
+	clock *chesstest.BankedClock
 }
 
 // Run processes UCI commands until quit/EOF. Protocol errors are
@@ -187,6 +194,12 @@ func (b *Bridge) think(args []string) (string, error) {
 	if d, ok := goDepth(args); ok {
 		depth, budget = d, 0 // fixed-depth mode
 	}
+	if b.Banked && budget != 0 {
+		if b.clock == nil || b.clock.Base != budget {
+			b.clock = &chesstest.BankedClock{Base: budget}
+		}
+		budget = b.clock.Alloc()
+	}
 	chesstest.SetBudget(m, b.Defs, budget, depth)
 	m.Mem.Main[b.Defs["HALFMOVE"]] = byte(min(b.pos.HalfmoveClock(), 255))
 	if b.Dither {
@@ -215,6 +228,9 @@ func (b *Bridge) think(args []string) (string, error) {
 		b.aux = make([]byte, len(m.Mem.Aux))
 	}
 	copy(b.aux, m.Mem.Aux[:]) // carry the TT forward
+	if b.clock != nil && budget != 0 {
+		b.clock.Settle(m.Cycles)
+	}
 
 	if code == 2 {
 		return "0000", nil // no legal move; cutechess shouldn't ask
