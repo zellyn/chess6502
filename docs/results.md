@@ -3,6 +3,48 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-19 — mirror verdicts: futility, LMR sweep, QS-shape (3 tasks)
+
+Three mirror A/B campaigns (internal/mirror/ab_test.go), all depth-6,
+node counts vs the current-rules base of 922,898 on the mirror bench
+set (qs = 819,637 = 89% of nodes). Matches are mirror self-play at
+depth 6, ~200-800 games, Elo vs the current-rules baseline. **Bottom
+line: two "obvious" improvements are duds, one QS knob is a keeper.**
+
+**1. Futility mate-zone guard fix (task #27) — DO NOT PORT.**
+The asm's futility/RFP guard uses an unsigned compare, so futility is
+silently disabled in every negative-alpha/beta window (the same bug
+class as the old null-move one). Fixing it (signed-aware, futility
+active in those windows) cuts −20.7% nodes — but costs strength:
+- 800-game match, fix=true vs current: +229 =295 −276, 47.1%,
+  **−20.4 ± 19.2 Elo**. Four smaller 200-game runs agree (−31, −23,
+  −17, −10). The extra pruning in negative windows is cutting real
+  moves. **The "bug" is protective; leave the asm as-is.** This
+  retires the held asm-side futility signed-compare fix.
+
+**2. LMR/PVS parameter sweep (task #28) — no porting winner.**
+Swept lateness {2,3,4}×{5,6,8}, R floors, reduce-killers, evasion-PVS.
+Node cuts are large; strength is flat-to-negative everywhere:
+- `2,6,2,4+killers` −53.4% nodes; `3,6,2,4` −48.6%; `rem1=2` −40.5%.
+- But matches (±38 Elo, ~200 games each): `4,8,3,5,0,1` −0,
+  `4,7,3,4,0,1` −2 / −14, `3,6,3,5,1,1` −14 / −37, `4,7,3,5,0,0` −26,
+  `4,7,2,5,0,1` −44. Nothing beats current rules; the deep node-cutters
+  lose Elo. **Current LMR is already well-tuned — no change to port.**
+
+**3. QS-shape experiments (task #29) — recap2 is a keeper.**
+Deep-QS knobs: PlyCap (force stand-pat past N qs plies, evasions
+exempt) and RecapAfter (past N qs plies, captures only onto the
+previous move's TO square). Node cuts (total / qs):
+- `recap1` −35.5% / −39.4% · `cap2` −29.3% / −32.7% · `recap2`
+  −21.4% / −24.4% · `cap4` −20.0% · `cap6` −13.2%.
+- Matches: `recap1` (qs 0,1) = **−123 ± 42, catastrophic** (chops the
+  recapture tree one ply too early); `recap2` (qs 0,2) = **−10 ± 38,
+  statistically neutral** at −21% nodes. `cap2` match still pending.
+- **Winner: recap2** — ~−24% QS-node saving at no measurable strength
+  cost. This is the one portable lever of the three. Asm port (a
+  RecapAfter gate in generateq/qsearch) deferred to a careful pass;
+  it is inner-loop QS-generation work.
+
 ## 2026-07-19 — first full rating-pool gauntlet (standing scoreboard)
 
 runs/pool.sh @c96f604: 30 games per opponent, 30s emulated/move with
