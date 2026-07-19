@@ -3,6 +3,35 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-19 — pawnterm rank-bitmask + two latent bugs + Texel weights
+
+The restructure (per-file rank-occupancy bytes + gentables lookup
+tables; scratch $0200-$020F) was gated on exact parity — and the gate
+earned its keep twice before passing:
+
+- **h-file isolated bug (old code)**: ptneighw/b returned the flags of
+  `cpx #7` (Z set) on the file-h path, so h-file pawns with a g-file
+  neighbor were scored isolated anyway. Symmetric ±12 wash in balanced
+  positions, real error otherwise. Fixed (`ora #0`, commented
+  load-bearing).
+- **king-shield scratch clobber (old code)**: ptsuba stomped EVTMP,
+  which the shield loops use for the king file, so the black shield
+  read past the array (into stale PWMAX bytes) after its first term.
+  Fixed (ptsuba uses MULCNT).
+
+With buggy-old off the table as a reference, the gate is now a Go
+model of the intended semantics: TestPStructParity, asm == model over
+4,045 random-game positions, exact. QS profile: pawnterm's share of
+total cycles 15.7% → 12.9% (the 32-slot piece-list scan still
+dominates its cost).
+
+**Texel-tuned weights** (from the mirror, task #20: +18 ± 17 vs
+no-pstruct over 800 mirror games): isolated 12→10 (split from doubled,
+which stays 12), PASSEDBONUS → [0,18,0,33,62,69,28,0], shield 8→3,
+open king file 10→4. Asm-side 50-pair SPRT 0x1F vs 0x17: −7 ± 50 —
+under-powered at 100 games, consistent with the mirror's CI; the
+mirror number is the load-bearing one.
+
 ## 2026-07-18 — time-management campaign, items 1-2 (gating, generateq)
 
 1. **Predictive iteration gating + mate-stop** (driver): start iteration
