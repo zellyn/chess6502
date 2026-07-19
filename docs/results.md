@@ -31,19 +31,29 @@ Node cuts are large; strength is flat-to-negative everywhere:
   `4,7,2,5,0,1` −44. Nothing beats current rules; the deep node-cutters
   lose Elo. **Current LMR is already well-tuned — no change to port.**
 
-**3. QS-shape experiments (task #29) — recap2 is a keeper.**
+**3. QS-shape experiments (task #29, COMPLETE) — recap2 is the keeper.**
 Deep-QS knobs: PlyCap (force stand-pat past N qs plies, evasions
 exempt) and RecapAfter (past N qs plies, captures only onto the
 previous move's TO square). Node cuts (total / qs):
 - `recap1` −35.5% / −39.4% · `cap2` −29.3% / −32.7% · `recap2`
   −21.4% / −24.4% · `cap4` −20.0% · `cap6` −13.2%.
-- Matches: `recap1` (qs 0,1) = **−123 ± 42, catastrophic** (chops the
-  recapture tree one ply too early); `recap2` (qs 0,2) = **−10 ± 38,
-  statistically neutral** at −21% nodes. `cap2` match still pending.
-- **Winner: recap2** — ~−24% QS-node saving at no measurable strength
-  cost. This is the one portable lever of the three. Asm port (a
-  RecapAfter gate in generateq/qsearch) deferred to a careful pass;
-  it is inner-loop QS-generation work.
+- Matches, depth 6, 200 games (100 color-swapped pairs), Elo vs the
+  current-rules (uncapped-QS) baseline, all seed 6502:
+  - `recap1` (qs 0,1) = **−123 ± 42, catastrophic** (chops the
+    recapture tree one ply too early).
+  - `recap2` (qs 0,2) = **−12 ± 39** (+61 =71 −68, 48.2%) — confirms
+    the prior −10 ± 38 run; statistically neutral at −21%/−24% nodes.
+  - `cap2` (qs 2,0) = **−113 ± 40** (+34 =69 −97, 34.2%) — a dud,
+    nearly as bad as recap1. Forcing stand-pat at qs ply 2 blinds QS
+    to deeper captures/recaptures; the PlyCap knob only pays off much
+    deeper (cap6/cap8 barely cut nodes, so there's no useful window).
+- **Winner: recap2 (qs=0,2), no combo.** A cap+recap blend is not
+  worth pursuing — the only cap shallow enough to save real nodes
+  (cap2) is catastrophic, and recap2 already delivers the full −24% QS
+  saving at neutral strength on its own. recap2 is the one portable
+  lever of the three campaigns. Asm port (a RecapAfter gate in
+  generateq/qsearch — capture onto undo[ply-1].to only, past 2 qs
+  plies) deferred to a careful inner-loop QS-generation pass.
 
 ## 2026-07-19 — first full rating-pool gauntlet (standing scoreboard)
 
