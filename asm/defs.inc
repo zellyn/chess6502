@@ -64,14 +64,14 @@ MVFLAGS   = $15
 ATSQ      = $16         ; attacked(): target square
 ATSIDE    = $17         ; attacked(): attacking side (0 or COLORMASK)
 ATTMP     = $18         ; attacked(): scratch (candidate from-square)
-; $19 free (was ATSLOT; attacked() now counts slots in X)
+PREVSC0   = $19         ; previous completed iteration's root score,
+PREVSC1   = $20         ;  restored with the PREV move on hard abort
 GTMP      = $1A         ; movegen scratch
 GSLOT     = $1B         ; movegen: current slot
 GFROM     = $1C         ; movegen: current from-square
 GPIECE    = $1D         ; movegen: current piece byte
 GDIR      = $1E         ; movegen: current direction index
 GDELTA    = $1F         ; movegen: current step delta
-; $20 free (was CAPSLOT, retired with slotof -> SLOTTAB)
 PROMTYPE  = $21         ; movegen: promotion loop scratch
 GTO       = $22         ; movegen scratch target square
 ATBITS    = $23         ; attacked(): attack-table bits for current diff

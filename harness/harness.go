@@ -147,6 +147,23 @@ func (m *Machine) Run(maxCycles uint64) (exited bool, exitCode byte, err error) 
 	return m.Mem.exited, m.Mem.exitCode, nil
 }
 
+// RunProfile executes like Run, additionally invoking fn after every
+// instruction with that instruction's address and cycle cost. Roughly
+// 2-3x slower than Run; intended for profiling and diagnostics.
+func (m *Machine) RunProfile(maxCycles uint64, fn func(pc uint16, cycles uint8)) (exited bool, exitCode byte, err error) {
+	limit := m.Cycles + maxCycles
+	m.Mem.waitingInput = false
+	for !m.Mem.exited && m.Cycles < limit && !m.Mem.waitingInput {
+		pc := m.CPU.PC()
+		before := m.Cycles
+		if stepErr := m.CPU.Step(); stepErr != nil {
+			return false, 0, stepErr
+		}
+		fn(pc, uint8(m.Cycles-before))
+	}
+	return m.Mem.exited, m.Mem.exitCode, nil
+}
+
 // WaitingForInput reports whether the last Run returned because the
 // program polled the input-status trap with an empty input buffer.
 func (m *Machine) WaitingForInput() bool { return m.Mem.waitingInput }

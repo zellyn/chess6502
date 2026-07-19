@@ -82,15 +82,23 @@ idloop: jsr iterate
         ; first root move it happened to search (fail-hard alpha starts at
         ; -INF), so prefer the last COMPLETED iteration's move whenever
         ; one exists. (D9's improved-on-previous-score refinement needs
-        ; score bookkeeping; this is the safe subset.)
+        ; score bookkeeping; this is the safe subset.) Also restore that
+        ; iteration's score and depth, so the reported score is not the
+        ; abort dummy and CURDEPTH is the depth actually completed.
         lda PREVFROM
         cmp #NOSQ
-        beq report              ; iteration 1 aborted: keep what we have
-        sta BESTFROM
+        bne :+
+        jmp report              ; iteration 1 aborted: keep what we have
+:       sta BESTFROM
         lda PREVTO
         sta BESTTO
         lda PREVFLAGS
         sta BESTFLAGS
+        lda PREVSC0
+        sta SCORE
+        lda PREVSC1
+        sta SCORE+1
+        dec CURDEPTH            ; iteration 1 never aborts, so >= 1
         jmp report
 idok:   ; don't start another iteration past half the budget
         lda BUDGET2
@@ -125,6 +133,10 @@ iterate:
         sta PREVTO
         lda BESTFLAGS
         sta PREVFLAGS
+        lda SCORE               ; previous iteration's root score
+        sta PREVSC0
+        lda SCORE+1
+        sta PREVSC1
         lda #NOSQ
         sta BESTFROM
         lda CURDEPTH
