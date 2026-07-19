@@ -75,7 +75,13 @@ ldloop: lda (ZPTR),y
         jmp report
 idmode: lda #1
         sta CURDEPTH
-idloop: jsr iterate
+idloop: lda CLOCK_TRAP          ; iteration start time (latched 24-bit)
+        sta ITSTART0
+        lda CLOCK_TRAP+1
+        sta ITSTART1
+        lda CLOCK_TRAP+2
+        sta ITSTART2
+        jsr iterate
         lda ABORT
         beq idok
         ; aborted mid-iteration: a partial iteration's "best" is just the
@@ -100,29 +106,60 @@ idloop: jsr iterate
         sta SCORE+1
         dec CURDEPTH            ; iteration 1 never aborts, so >= 1
         jmp report
-idok:   ; don't start another iteration past half the budget
-        lda BUDGET2
-        lsr
-        sta T2
-        lda BUDGET1
-        ror
-        sta T1
-        lda BUDGET0
-        ror
+reportj:
+        jmp report
+idok:   ; a winning mate is exact and final: deepening can't improve it
+        lda SCORE+1
+        bmi :+
+        cmp #MATEZONEHI
+        bcs reportj
+:       ; predictive gate: the next iteration is estimated at 2x the
+        ; one just finished (QS-dominated growth ratios run 2-6, and
+        ; the 2x-budget hard abort still backstops underestimates).
+        ; Start it only if now + 2*cost fits inside the full budget -
+        ; otherwise stop HERE with the completed move, instead of
+        ; burning up to 1.5x budget on a doomed iteration (measured:
+        ; ~25% of middlegame moves were hard-aborting).
+        lda CLOCK_TRAP          ; latch now; cost = now - ITSTART
+        sec
+        sbc ITSTART0
         sta T0
-        lda CLOCK_TRAP
-        cmp T0
         lda CLOCK_TRAP+1
-        sbc T1
+        sbc ITSTART1
+        sta T1
         lda CLOCK_TRAP+2
-        sbc T2
-        bcs report              ; spent >= budget/2
+        sbc ITSTART2
+        asl T0                  ; est = 2*cost, saturating
+        rol T1
+        rol
+        bcs reportj             ; overflow: nowhere near fitting
+        sta T2
+        lda CLOCK_TRAP          ; now + est (CLOCK latch: low read
+        clc                     ;  relatches; same tick as above or
+        adc T0                  ;  a hair later - both fine)
+        sta T0
+        lda CLOCK_TRAP+1
+        adc T1
+        sta T1
+        lda CLOCK_TRAP+2
+        adc T2
+        bcs report              ; overflow: can't fit
+        sta T2
+        lda T0                  ; fits iff now + est <= BUDGET
+        cmp BUDGET0
+        lda T1
+        sbc BUDGET1
+        lda T2
+        sbc BUDGET2
+        bcs report              ; projected past the budget: stop now
         inc CURDEPTH
         lda CURDEPTH
         cmp MAXCAP
-        bcc idloop
-        beq idloop
+        bcc idloopj
+        beq idloopj
         jmp report
+idloopj:
+        jmp idloop
 
 ; iterate: run one full-window search at CURDEPTH, saving the previous
 ; iteration's best move first.

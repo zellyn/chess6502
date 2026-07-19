@@ -215,6 +215,11 @@ SMODE      = $0DE0      ; child window mode for the move being searched:
                         ;  0 full window, 1 zero-window scout (PVS),
                         ;  2/3 scout reduced by 1/2 (LMR)
 
+; Driver scratch (budget mode)
+ITSTART0   = $0230      ; 24-bit CLOCK snapshot at iteration start
+ITSTART1   = $0231      ;  (predictive gate: est next = 2x last cost)
+ITSTART2   = $0232
+
 MOVESTACK  = $0E00      ; 3 bytes/move (from,to,flags); through $1FFF
 MOVESTACKTOP = $2000    ; exclusive end; generator overflow-checks this
 
