@@ -14,6 +14,7 @@ type PlayerCfg struct {
 	Weights     Weights
 	Depth       int
 	LMR         *LMRParams
+	QS          QSParams
 	FixFutility bool
 }
 
@@ -23,6 +24,7 @@ func (c *PlayerCfg) engine() *Engine {
 	if c.LMR != nil {
 		e.LMR = *c.LMR
 	}
+	e.QS = c.QS
 	e.FixFutilityGuard = c.FixFutility
 	return e
 }

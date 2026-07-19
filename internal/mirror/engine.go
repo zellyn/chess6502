@@ -20,6 +20,10 @@ type Engine struct {
 	// LMR/PVS tuning knobs, defaulting to the asm's current rules.
 	LMR LMRParams
 
+	// QS-shape knobs (zero values = the asm's current unlimited QS).
+	QS      QSParams
+	QSNodes uint64 // nodes entered at ply >= MaxDepth (evasion included)
+
 	Best      Move // root best move (BESTFROM/BESTTO/BESTFLAGS)
 	RootScore int
 
@@ -71,6 +75,16 @@ type LMRParams struct {
 
 // DefaultLMR mirrors the asm's current constants.
 var DefaultLMR = LMRParams{LateR1: 4, LateR2: 7, MinRemR1: 3, MinRemR2: 5, EvasionPVS: true}
+
+// QSParams shape the quiescence search. QS ply = PLY - MAXDEPTH.
+type QSParams struct {
+	// PlyCap: at qs ply >= this, non-evasion nodes return the stand-pat
+	// result without generating captures. 0 = no cap.
+	PlyCap int
+	// RecapAfter: at qs ply >= this, capture nodes consider only
+	// captures landing on the previous move's TO square. 0 = off.
+	RecapAfter int
+}
 
 // NewEngine returns an engine with all features on and the asm's
 // current pstruct weights and LMR rules.

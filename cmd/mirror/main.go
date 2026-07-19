@@ -110,21 +110,60 @@ func match(args []string) {
 	pairs := fs.Int("pairs", 150, "game pairs (2 games each)")
 	workers := fs.Int("workers", runtime.NumCPU()-2, "parallel pairs")
 	seed := fs.Uint64("seed", 6502, "RNG seed")
-	aMask := fs.Uint("afeat", 0x0F, "A feature mask")
-	bMask := fs.Uint("bfeat", 0x0F, "B feature mask")
+	aMask := fs.Uint("afeat", uint(mirror.FtAll), "A feature mask")
+	bMask := fs.Uint("bfeat", uint(mirror.FtAll), "B feature mask")
 	aw := fs.String("aweights", "default", "A pstruct weights: default|tuned|w:d,i,p1..p6,s,o")
 	bw := fs.String("bweights", "default", "B pstruct weights")
+	aFix := fs.Bool("afix", false, "A uses the fixed futility mate-zone guard")
+	bFix := fs.Bool("bfix", false, "B uses the fixed futility mate-zone guard")
+	aLMR := fs.String("almr", "", "A LMR params late1,late2,rem1,rem2,killers,evasion (empty = asm current)")
+	bLMR := fs.String("blmr", "", "B LMR params")
+	aQS := fs.String("aqs", "0,0", "A QS shape: plycap,recapafter (0 = off)")
+	bQS := fs.String("bqs", "0,0", "B QS shape")
 	fs.Parse(args)
 
 	lines, err := mirror.GenOpenings(sprt.Openings, *pairs, *seed)
 	check(err)
-	a := mirror.PlayerCfg{Features: byte(*aMask), Weights: parseWeights(*aw), Depth: *depth}
-	b := mirror.PlayerCfg{Features: byte(*bMask), Weights: parseWeights(*bw), Depth: *depth}
+	a := mirror.PlayerCfg{Features: byte(*aMask), Weights: parseWeights(*aw), Depth: *depth,
+		FixFutility: *aFix, LMR: parseLMR(*aLMR), QS: parseQS(*aQS)}
+	b := mirror.PlayerCfg{Features: byte(*bMask), Weights: parseWeights(*bw), Depth: *depth,
+		FixFutility: *bFix, LMR: parseLMR(*bLMR), QS: parseQS(*bQS)}
 	start := time.Now()
 	res, err := mirror.Match(a, b, lines, *pairs, *workers, *seed)
 	check(err)
-	fmt.Printf("A(%#02x %s) vs B(%#02x %s) depth %d: %s (%v)\n",
-		byte(*aMask), *aw, byte(*bMask), *bw, *depth, res, time.Since(start).Round(time.Second))
+	fmt.Printf("A(%#02x %s fix=%v lmr=%q qs=%q) vs B(%#02x %s fix=%v lmr=%q qs=%q) depth %d: %s (%v)\n",
+		byte(*aMask), *aw, *aFix, *aLMR, *aQS, byte(*bMask), *bw, *bFix, *bLMR, *bQS,
+		*depth, res, time.Since(start).Round(time.Second))
+}
+
+// parseQS parses "plycap,recapafter".
+func parseQS(s string) mirror.QSParams {
+	var q mirror.QSParams
+	n, err := fmt.Sscanf(s, "%d,%d", &q.PlyCap, &q.RecapAfter)
+	if err != nil || n != 2 {
+		fmt.Fprintf(os.Stderr, "bad QS params %q\n", s)
+		os.Exit(2)
+	}
+	return q
+}
+
+// parseLMR parses "late1,late2,rem1,rem2,killers,evasion" (e.g.
+// "3,6,3,5,0,1"); empty means the asm's current rules.
+func parseLMR(s string) *mirror.LMRParams {
+	if s == "" {
+		return nil
+	}
+	var p mirror.LMRParams
+	var k, e int
+	n, err := fmt.Sscanf(s, "%d,%d,%d,%d,%d,%d",
+		&p.LateR1, &p.LateR2, &p.MinRemR1, &p.MinRemR2, &k, &e)
+	if err != nil || n != 6 {
+		fmt.Fprintf(os.Stderr, "bad LMR params %q\n", s)
+		os.Exit(2)
+	}
+	p.ReduceKillers = k != 0
+	p.EvasionPVS = e != 0
+	return &p
 }
 
 func parseWeights(s string) mirror.Weights {

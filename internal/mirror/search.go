@@ -61,6 +61,7 @@ func (e *Engine) search() int {
 	if ply >= e.MaxDepth {
 		// Quiescence entry; in check it becomes a full evasion node
 		// (no TT probe, no sprep, but full move loop + mate detection).
+		e.QSNodes++
 		if !e.inChk[ply] {
 			e.qsKind[ply] = true
 			score := e.eval()
@@ -69,6 +70,10 @@ func (e *Engine) search() int {
 			}
 			if score > e.alpha[ply] {
 				e.alpha[ply] = score
+			}
+			// QS ply cap: beyond it, the stand-pat result is final.
+			if e.QS.PlyCap > 0 && ply-e.MaxDepth >= e.QS.PlyCap {
+				return e.alpha[ply]
 			}
 			// Delta-pruning threshold, disabled at low phase.
 			if p.Phase >= 6 {
@@ -198,6 +203,12 @@ func (e *Engine) moveLoop() int {
 						continue
 					}
 				} else {
+					// Deep-qs recapture-only: past the threshold, only
+					// captures landing on the previous move's TO square.
+					if qs && e.QS.RecapAfter > 0 && ply > 0 &&
+						ply-e.MaxDepth >= e.QS.RecapAfter && m.To != e.undo[ply-1].to {
+						continue
+					}
 					if pass >= 3 {
 						continue // captures were passes 1/2
 					}
