@@ -89,7 +89,7 @@ func TestTreeSizeNodes(t *testing.T) {
 		t.Skip("slow")
 	}
 	fen := "r1b1k2r/ppp2ppp/2nqpn2/3p4/3P4/P1P1BN2/2P1PPPP/2RQKB1R w Kkq - 2 8"
-	for _, mask := range []byte{0x00, 0x01, 0x07, 0x0F} {
+	for _, mask := range []byte{0x00, 0x01, 0x07, 0x0F, 0x1F} {
 		pos, err := ParseFEN(fen)
 		if err != nil {
 			t.Fatal(err)

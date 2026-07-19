@@ -123,13 +123,19 @@ func (e *Engine) search() int {
 				return e.beta[ply]
 			}
 		}
-		// RFP + futility at remaining <= 2. NOTE (faithful mirror of an
-		// asm quirk): the mate-zone guards fall through so that ANY
+		// RFP + futility at remaining <= 2, guarded away from mate-zone
+		// windows. The asm's current guard falls through so that ANY
 		// negative alpha or beta skips this block — futility fires only
-		// when the whole window is in [0, +mate-zone).
-		if e.Features&FtFutil != 0 &&
-			e.alpha[ply] >= 0 && e.alpha[ply] < mateZoneLo &&
-			e.beta[ply] >= 0 && e.beta[ply] < mateZoneLo {
+		// when the whole window is in [0, +mate-zone). FixFutilityGuard
+		// is the intended signed-aware test (only actual mate-zone
+		// bounds disable it) — the A/B for the asm fix.
+		guardOK := e.alpha[ply] >= 0 && e.alpha[ply] < mateZoneLo &&
+			e.beta[ply] >= 0 && e.beta[ply] < mateZoneLo
+		if e.FixFutilityGuard {
+			guardOK = e.alpha[ply] > nmateZoneHi && e.alpha[ply] < mateZoneLo &&
+				e.beta[ply] > nmateZoneHi && e.beta[ply] < mateZoneLo
+		}
+		if e.Features&FtFutil != 0 && guardOK {
 			remaining := e.MaxDepth - ply
 			if remaining < 3 {
 				ev := e.eval()
@@ -231,10 +237,58 @@ func (e *Engine) moveLoop() int {
 				continue
 			}
 			e.legal[ply]++
-			e.alpha[ply+1] = -e.beta[ply]
-			e.beta[ply+1] = -e.alpha[ply]
-			score := -e.search()
-			e.unmake()
+
+			// Child window mode (FT_LMR: PVS + late move reductions),
+			// mirroring the asm smset block: 0 = full window, 1 = zero-
+			// window scout, 2/3 = scout reduced by 1/2. First legal move
+			// always full window; reductions only for late quiets, never
+			// in check or giving check, never at the root.
+			mode := 0
+			if e.Features&FtLMR != 0 && !qs && e.legal[ply] >= 2 &&
+				(e.LMR.EvasionPVS || !e.inChk[ply]) {
+				mode = 1
+				passOK := pass == 4 || (e.LMR.ReduceKillers && pass == 3)
+				rem := e.MaxDepth - ply
+				if ply != 0 && passOK && !e.inChk[ply] && !e.inChk[ply+1] &&
+					e.legal[ply] >= e.LMR.LateR1 && rem >= e.LMR.MinRemR1 {
+					mode = 2
+					if rem >= e.LMR.MinRemR2 && e.legal[ply] >= e.LMR.LateR2 {
+						mode = 3
+					}
+				}
+			}
+
+			var score int
+			for {
+				e.beta[ply+1] = -e.alpha[ply]
+				if mode != 0 {
+					e.alpha[ply+1] = e.beta[ply+1] - 1
+				} else {
+					e.alpha[ply+1] = -e.beta[ply]
+				}
+				if mode >= 2 {
+					e.MaxDepth -= mode - 1 // reduced scout: shrink the horizon
+					score = -e.search()
+					e.MaxDepth += mode - 1
+				} else {
+					score = -e.search()
+				}
+				e.unmake()
+				if mode == 0 || score <= e.alpha[ply] {
+					break // full-window result, or scout failed low: final
+				}
+				// Scout failed high: reduced retries unreduced; unreduced
+				// retries full-window only if the window is open (at a
+				// zero-window node the fail-high result is final).
+				if mode >= 2 {
+					mode = 1
+				} else if e.beta[ply]-e.alpha[ply] >= 2 {
+					mode = 0
+				} else {
+					break
+				}
+				e.make(m) // legality already proven
+			}
 
 			if score >= e.beta[ply] {
 				// Fail-hard beta cutoff.

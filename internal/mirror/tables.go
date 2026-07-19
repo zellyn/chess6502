@@ -63,6 +63,9 @@ const (
 	FtKiller  = 0x02
 	FtFutil   = 0x04
 	FtPstruct = 0x08
+	FtLMR     = 0x10 // PVS zero-window scouts + late move reductions
+
+	FtAll = FtNull | FtKiller | FtFutil | FtPstruct | FtLMR
 )
 
 // TT bound codes.

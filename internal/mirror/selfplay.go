@@ -7,11 +7,24 @@ import (
 	"sync"
 )
 
-// PlayerCfg configures one side of a self-play game.
+// PlayerCfg configures one side of a self-play game. A nil LMR means
+// the asm's current rules (DefaultLMR).
 type PlayerCfg struct {
-	Features byte
-	Weights  Weights
-	Depth    int
+	Features    byte
+	Weights     Weights
+	Depth       int
+	LMR         *LMRParams
+	FixFutility bool
+}
+
+func (c *PlayerCfg) engine() *Engine {
+	e := NewEngine()
+	e.Features, e.Weights = c.Features, c.Weights
+	if c.LMR != nil {
+		e.LMR = *c.LMR
+	}
+	e.FixFutilityGuard = c.FixFutility
+	return e
 }
 
 // Sample is one labeled training position for Texel tuning: the eval
@@ -41,9 +54,7 @@ func PlayGame(white, black PlayerCfg, opening []string, rnd *rand.Rand, collect 
 	if err != nil {
 		return GameRec{}, err
 	}
-	we, be := NewEngine(), NewEngine()
-	we.Features, we.Weights = white.Features, white.Weights
-	be.Features, be.Weights = black.Features, black.Weights
+	we, be := white.engine(), black.engine()
 
 	gp := *start
 	for _, ms := range opening {

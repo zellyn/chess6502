@@ -11,6 +11,15 @@ type Engine struct {
 	MaxDepth int
 	Nodes    uint64
 
+	// FixFutilityGuard switches the RFP/futility mate-zone guard from
+	// the asm's current fall-through form (any negative alpha or beta
+	// disables the block) to the intended signed-aware test (only
+	// actual mate-zone bounds disable it). A/B experiment for the asm.
+	FixFutilityGuard bool
+
+	// LMR/PVS tuning knobs, defaulting to the asm's current rules.
+	LMR LMRParams
+
 	Best      Move // root best move (BESTFROM/BESTTO/BESTFLAGS)
 	RootScore int
 
@@ -48,10 +57,25 @@ type ttEntry struct {
 	depthBound byte
 }
 
+// LMRParams are the PVS/LMR rule constants (asm search.s smset block).
+// Legal-move counts include the move being classified, matching the
+// asm's post-increment LEGALCNT compares.
+type LMRParams struct {
+	LateR1        int  // reduce by 1 when LEGALCNT >= this (asm: cmp #4)
+	LateR2        int  // reduce by 2 when LEGALCNT >= this (asm: cmp #7)
+	MinRemR1      int  // remaining-depth floor for any reduction (asm: cmp #3)
+	MinRemR2      int  // remaining-depth floor for reduce-by-2 (asm: cmp #5)
+	ReduceKillers bool // also reduce pass-3 killer quiets (asm: pass 4 only)
+	EvasionPVS    bool // zero-window scouts at in-check nodes (asm: yes)
+}
+
+// DefaultLMR mirrors the asm's current constants.
+var DefaultLMR = LMRParams{LateR1: 4, LateR2: 7, MinRemR1: 3, MinRemR2: 5, EvasionPVS: true}
+
 // NewEngine returns an engine with all features on and the asm's
-// current pstruct weights.
+// current pstruct weights and LMR rules.
 func NewEngine() *Engine {
-	e := &Engine{Features: FtNull | FtKiller | FtFutil | FtPstruct, Weights: DefaultWeights}
+	e := &Engine{Features: FtAll, Weights: DefaultWeights, LMR: DefaultLMR}
 	for i := range e.moves {
 		e.moves[i] = make([]Move, 0, 128)
 	}
