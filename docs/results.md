@@ -3,6 +3,39 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-19 — first full rating-pool gauntlet (standing scoreboard)
+
+runs/pool.sh @c96f604: 30 games per opponent, 30s emulated/move with
+-dither -bank, paired colors from tools/openings-pool.epd (TSCP runs
+bookless — xboard v1, no setboard, forfeits on book positions; its
+variety comes from -dither). PGNs in tools/pgn/pool_c96f604_*.pgn.
+
+| Opponent  | Result (W-L-D) | Score | Elo diff (logistic) |
+|-----------|----------------|-------|---------------------|
+| NEG       | 30-0-0         | 100%  | (unbounded +)       |
+| minnow    | 30-0-0         | 100%  | (unbounded +)       |
+| SF-n10    | 6-23-1         | 21.7% | −223                |
+| SF-n100   | 2-26-2         | 10.0% | −382                |
+| FairyMax  | 1-27-2         | 6.7%  | −458                |
+| TSCP-d3   | 1-29-0         | 3.3%  | −585                |
+| SF-n1000  | 0-30-0         | 0%    | (unbounded −)       |
+
+Anchoring, with caveats stacked high: Fairy-Max is CCRL ~1890, so the
+−458 puts us at ≈**1430** — but Fairy-Max here plays st=2 wall (below
+its CCRL time control, so the true gap is larger than the CCRL number
+implies), and n=30 gives roughly ±120 Elo bars per match. TSCP-d3
+implies lower still, but depth-3-capped TSCP has no published rating
+(full TSCP is ~1700). Treat ≈1400±150 as the first honest anchor and
+the SF node ladder (21.7% / 10% / 0%) as the sensitive internal
+yardstick — node-limited Stockfish is perfectly reproducible, so
+future builds move that ladder or they didn't get stronger.
+
+Notes: TSCP-d3 3.3% vs the banked-time 11.7% two entries down is n=30
+noise plus opening-variety differences (both bookless, different
+dither seeds) — the pool number is the standing-conditions one going
+forward. The 180 pool PGNs are the first non-self-play Texel corpus
+material (diversification queued, task #23 remainder).
+
 ## 2026-07-19 — banked time: first real move in the TSCP needle
 
 Chess-clock banking rig-side (chesstest.BankedClock, bridge -bank
