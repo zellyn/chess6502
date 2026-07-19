@@ -132,9 +132,10 @@ func main() {
 	//   WPASSB[bits]  = PASSEDBONUS[rank of most advanced white pawn]
 	//   BBLOCKM[bits] = ranks <= the most advanced black pawn (ditto <=)
 	//   BPASSB[bits]  = PASSEDBONUS[7 - that rank]
-	// The passed-pawn bonus weights live HERE now (Texel tuning slots
-	// its values in and regenerates).
-	passedBonus := []int{0, 8, 12, 18, 28, 45, 70, 0}
+	// The passed-pawn bonus weights live HERE now. Values are the
+	// Texel-tuned set from the Go mirror (validated +18 +/- 17 vs
+	// no-pstruct over 800 mirror games; see docs/results.md).
+	passedBonus := []int{0, 18, 0, 33, 62, 69, 28, 0}
 	var rankBit [128]byte
 	for sq := range rankBit {
 		if sq&0x88 == 0 {

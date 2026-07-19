@@ -463,7 +463,7 @@ ptfile: lda PWBITS,x
         jsr ptsub12
 :       jsr ptneighw            ; isolated: no own pawns on neighbors
         bne :+
-        jsr ptsub12
+        jsr ptsub10
 :       jsr ptorb3              ; A = black bits on files x-1..x+1
         and WBLOCKM,y           ; any black pawn at rank >= our best?
         bne ptwd0
@@ -480,7 +480,7 @@ ptwd0:  ; black side, mirrored (advancement = low rank)
         jsr ptadd12
 :       jsr ptneighb
         bne :+
-        jsr ptadd12
+        jsr ptadd10
 :       jsr ptorw3
         and BBLOCKM,y
         bne ptnextf
@@ -530,10 +530,16 @@ ptsuba: sta MULCNT              ; NOT EVTMP: the king-shield loops keep
         dec T1
 :       rts
 ptadd12:
-        lda #12
+        lda #12                 ; doubled
         bne ptadda              ; always
 ptsub12:
         lda #12
+        bne ptsuba              ; always
+ptadd10:
+        lda #10                 ; isolated (Texel-tuned)
+        bne ptadda              ; always
+ptsub10:
+        lda #10
         bne ptsuba              ; always
 
 ; ptneighw/b: Z set if both neighbor files have no own pawns.
@@ -588,25 +594,25 @@ ptshieldw:
         tay
         lda PWBITS,y
         beq :+
-        lda #8
+        lda #3
         jsr ptadda
 :       ldy EVTMP
         beq :+                  ; file a: no left neighbor
         lda PWBITS-1,y
         beq :+
-        lda #8
+        lda #3
         jsr ptadda
 :       ldy EVTMP
         cpy #7
         beq :+
         lda PWBITS+1,y
         beq :+
-        lda #8
+        lda #3
         jsr ptadda
 :       ldy EVTMP
         lda PWBITS,y
         bne :+
-        lda #10                 ; open file under the king
+        lda #4                  ; open file under the king
         jsr ptsuba
 :       rts
 ptshieldb:
@@ -614,25 +620,25 @@ ptshieldb:
         tay
         lda PBBITS,y
         beq :+
-        lda #8
+        lda #3
         jsr ptsuba
 :       ldy EVTMP
         beq :+
         lda PBBITS-1,y
         beq :+
-        lda #8
+        lda #3
         jsr ptsuba
 :       ldy EVTMP
         cpy #7
         beq :+
         lda PBBITS+1,y
         beq :+
-        lda #8
+        lda #3
         jsr ptsuba
 :       ldy EVTMP
         lda PBBITS,y
         bne :+
-        lda #10
+        lda #4
         jsr ptadda
 :       rts
 

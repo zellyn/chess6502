@@ -7,17 +7,17 @@ import (
 	"github.com/zellyn/chess6502/internal/refchess"
 )
 
-var passedBonus = [8]int{0, 8, 12, 18, 28, 45, 70, 0} // keep = cmd/gentables
+var passedBonus = [8]int{0, 18, 0, 33, 62, 69, 28, 0} // keep = cmd/gentables (Texel-tuned)
 
 // refPStruct computes the intended pawn-structure + king-shield term
 // (white POV) from a position: the reference model for the asm
 // pawnterm. Semantics: doubled = flat -12 for >= 2 own pawns on a
-// file; isolated = -12 when no own pawns on adjacent files; passed =
+// file; isolated = -10 when no own pawns on adjacent files; passed =
 // bonus by the most advanced own pawn's rank when no enemy pawn on
 // files f-1..f+1 at rank >= it (white; <= for black, adjacent
 // same-rank enemy pawns block); king shield (white king on rank 0 /
-// black on rank 7 only) = +8 per own-pawn-occupied file of f-1..f+1,
-// -10 when the king's own file has no own pawn; black mirrors signs.
+// black on rank 7 only) = +3 per own-pawn-occupied file of f-1..f+1,
+// -4 when the king's own file has no own pawn; black mirrors signs.
 func refPStruct(pos *Position) int16 {
 	var wbits, bbits [8]byte
 	var wk, bk byte
@@ -59,7 +59,7 @@ func refPStruct(pos *Position) int16 {
 				acc -= 12
 			}
 			if neighbors(&wbits, f) == 0 {
-				acc -= 12
+				acc -= 10
 			}
 			hi := 7
 			for wb&(1<<hi) == 0 {
@@ -74,7 +74,7 @@ func refPStruct(pos *Position) int16 {
 				acc += 12
 			}
 			if neighbors(&bbits, f) == 0 {
-				acc += 12
+				acc += 10
 			}
 			lo := 0
 			for bb&(1<<lo) == 0 {
@@ -95,16 +95,16 @@ func refPStruct(pos *Position) int16 {
 	}
 	if wk>>4 == 0 {
 		n, open := shield(&wbits, int(wk&7))
-		acc += 8 * n
+		acc += 3 * n
 		if open {
-			acc -= 10
+			acc -= 4
 		}
 	}
 	if bk>>4 == 7 {
 		n, open := shield(&bbits, int(bk&7))
-		acc -= 8 * n
+		acc -= 3 * n
 		if open {
-			acc += 10
+			acc += 4
 		}
 	}
 	return int16(acc)
