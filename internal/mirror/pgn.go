@@ -103,6 +103,85 @@ var pgnFENTag = regexp.MustCompile(`\[FEN\s+"([^"]*)"\]`)
 
 const startposFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
+// PGNFenRows replays a PGN file and returns quiet, non-check positions
+// as FEN + white-POV result, mirroring PGNSamples' gates. This is the
+// king-bucket corpus source (which needs board placement).
+func PGNFenRows(path string) ([]FenRow, PGNStats, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, PGNStats{}, err
+	}
+	eng := NewEngine()
+	var out []FenRow
+	var st PGNStats
+	for _, blk := range strings.Split(string(data), "[Event ") {
+		if blk == "" {
+			continue
+		}
+		i := strings.Index(blk, "\n\n")
+		if i < 0 {
+			continue
+		}
+		header := blk[:i]
+		text := pgnMoveNo.ReplaceAllString(pgnComment.ReplaceAllString(blk[i:], ""), "")
+		fields := strings.Fields(text)
+		if len(fields) == 0 {
+			continue
+		}
+		result, ok := map[string]float64{"1-0": 1, "0-1": 0, "1/2-1/2": 0.5}[fields[len(fields)-1]]
+		if !ok {
+			st.Skipped++
+			continue
+		}
+		startFEN := startposFEN
+		if mm := pgnFENTag.FindStringSubmatch(header); mm != nil && strings.TrimSpace(mm[1]) != "" {
+			startFEN = mm[1]
+		}
+		gp, err := ParseFEN(startFEN)
+		if err != nil {
+			st.Skipped++
+			continue
+		}
+		plyGate := 8
+		if startFEN != startposFEN {
+			plyGate = 2
+		}
+		var pending []FenRow
+		bad := false
+		gate := 0
+		for ply, tok := range fields {
+			if tok == "1-0" || tok == "0-1" || tok == "1/2-1/2" || tok == "*" {
+				break
+			}
+			m, err := sanToMove(eng, gp, tok)
+			if err != nil {
+				bad = true
+				break
+			}
+			if err := applyUCI(eng, gp, m.UCI()); err != nil {
+				bad = true
+				break
+			}
+			if ply >= plyGate {
+				if _, ok := pgnQuietSample(eng, gp); ok {
+					gate++
+					if gate%2 == 0 { // every-2nd, matching self-play density
+						pending = append(pending, FenRow{FEN: gp.FEN(), R: result})
+					}
+				}
+			}
+		}
+		if bad {
+			st.Skipped++
+			continue
+		}
+		out = append(out, pending...)
+		st.Games++
+		st.Samples += len(pending)
+	}
+	return out, st, nil
+}
+
 // PGNSamples replays every game in a cutechess-style PGN file and
 // collects quiet, non-check, labeled positions after ply gate. Sampling
 // mirrors the self-play collector (ply >= 8, quiet, not in check) but

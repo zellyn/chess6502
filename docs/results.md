@@ -3,6 +3,50 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-19 — king-bucketed PSQT (task #30) — DOES NOT CARRY ITS WEIGHT
+
+NNUE/HalfKP-inspired but network-free: non-king pieces get a per-square
+value DELTA on top of base PeSTO, selected by the bucket of their own
+king's square (4 buckets by king file zone: a-b/c-d/e-f/g-h; cheap
+kingfile>>1, castling-aligned, no runtime multiply). Prototype behind
+Engine.KB (internal/mirror/kingpsqt.go), tuned by full-batch AdamW on a
+fresh 69,893-position FEN corpus (66,088 self-play depth-5 +
+3,805 pool; testdata/fenrows-2026-07-19.gz), then measured by depth-6
+self-play Elo. Tables and pipeline: `mirror genfen` / `mirror tunekb` /
+`match -akb`.
+
+Texel loss falls a LOT (much more than the 10-param pawn tune's
+~0.0003): val 0.1030 → 0.094-0.099 depending on L2. But the depth-6
+self-play matches (200 games each, A = tuned+KB vs B = tuned, seed 6502)
+go the other way:
+
+| weight decay | max\|delta\| | val loss | match Elo   |
+|--------------|-------------|----------|-------------|
+| 0.05         | 20          | 0.0974   | **−102 ± 42** (+44 =55 −101) |
+| 0.10         | 10          | 0.0995   | **−44 ± 40**  (+54 =67 −79)  |
+
+The Elo loss scales smoothly with delta magnitude (−44 at ≤10, −102 at
+≤20), so there is **no regularization sweet spot that gains** — every
+amount of king-file bucketing costs strength, extrapolating to 0 only as
+the deltas vanish. Not a sign bug: the eval/tuner consistency test
+passes and the effect scales cleanly with magnitude.
+
+**Verdict: king-file-bucketed PSQT does not carry its weight.** It costs
+44-102 Elo while adding ~2.5 KB of table storage (4×5×64×2 bytes, deltas
+do fit int8). The lesson is the Texel-loss / playing-strength divergence:
+a 2,560-param king-conditioned table overfits self-play result-
+correlation (and the hard bucket boundary at files d↔e — exactly where
+castling kings cross — revalues every piece discontinuously). NNUE's
+strength needs the actual network (end-to-end training + eval scale
+calibration), not just the HalfKP bucketing intuition bolted onto a
+hand PSQT. Infrastructure kept (toggle off by default) for any future
+king-safety eval work; the FEN corpus is reusable. **No asm port.**
+
+Aside: the AdamW fix matters and is guarded by TestKingBucketTune —
+folding L2 into the gradient (vs decoupled decay) lets Adam's per-param
+normalization amplify it into a restoring force that pins every delta to
+zero (loss frozen), which masqueraded as "no signal" until diagnosed.
+
 ## 2026-07-19 — Texel corpus diversification (task #23 remainder)
 
 Folded the 210-game rating-pool gauntlet (non-self-play: vs TSCP-d3,

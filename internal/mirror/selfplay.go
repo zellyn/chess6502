@@ -16,6 +16,7 @@ type PlayerCfg struct {
 	LMR         *LMRParams
 	QS          QSParams
 	FixFutility bool
+	KB          *KBTables
 }
 
 func (c *PlayerCfg) engine() *Engine {
@@ -26,6 +27,7 @@ func (c *PlayerCfg) engine() *Engine {
 	}
 	e.QS = c.QS
 	e.FixFutilityGuard = c.FixFutility
+	e.KB = c.KB
 	return e
 }
 
@@ -40,10 +42,11 @@ type Sample struct {
 
 // GameRec is one finished self-play game.
 type GameRec struct {
-	Result  float64 // white POV
-	Plies   int
-	Samples []Sample
-	Reason  string
+	Result    float64 // white POV
+	Plies     int
+	Samples   []Sample
+	QuietFENs []string // FENs of the sampled quiet positions (collect only)
+	Reason    string
 }
 
 // PlayGame plays one fixed-depth game from the given opening (UCI
@@ -109,6 +112,7 @@ func PlayGame(white, black PlayerCfg, opening []string, rnd *rand.Rand, collect 
 					base -= Tempo
 				}
 				pending = append(pending, Sample{Base: base, F: *extractPawnFeatures(&eng.Pos)})
+				rec.QuietFENs = append(rec.QuietFENs, gp.FEN())
 			}
 		}
 

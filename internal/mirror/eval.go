@@ -231,18 +231,23 @@ func extractPawnFeatures(p *Position) *pawnFeatures {
 // with D = MG-EG (magnitude multiply, so the shift truncates toward
 // zero). White POV, no pstruct/tempo/pov/dither.
 func (p *Position) taperedWhite() int {
-	phase := p.Phase
+	return taper(p.MG, p.EG, p.Phase)
+}
+
+// taper blends an (MG, EG) score pair by game phase, exactly as asm
+// eval (magnitude multiply, shift truncates toward zero).
+func taper(mg, eg, phase int) int {
 	if phase >= 25 {
 		phase = 24
 	}
 	w := phaseW[phase]
 	switch w {
 	case 32:
-		return p.MG
+		return mg
 	case 0:
-		return p.EG
+		return eg
 	}
-	d := p.MG - p.EG
+	d := mg - eg
 	neg := d < 0
 	if neg {
 		d = -d
@@ -251,7 +256,7 @@ func (p *Position) taperedWhite() int {
 	if neg {
 		prod = -prod
 	}
-	return p.EG + prod
+	return eg + prod
 }
 
 // eval returns the score from the side to move's POV including the
@@ -259,6 +264,9 @@ func (p *Position) taperedWhite() int {
 func (e *Engine) eval() int {
 	p := &e.Pos
 	score := p.taperedWhite()
+	if e.KB != nil {
+		score += e.kbDelta()
+	}
 	if e.Features&FtPstruct != 0 {
 		score += p.PStruct
 	}

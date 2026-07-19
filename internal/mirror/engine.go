@@ -24,6 +24,11 @@ type Engine struct {
 	QS      QSParams
 	QSNodes uint64 // nodes entered at ply >= MaxDepth (evasion included)
 
+	// KB, when non-nil, adds king-bucketed PSQT deltas to the eval
+	// (task #30: piece values depend on the king's file zone). nil =
+	// the asm's current single-PSQT eval.
+	KB *KBTables
+
 	Best      Move // root best move (BESTFROM/BESTTO/BESTFLAGS)
 	RootScore int
 
