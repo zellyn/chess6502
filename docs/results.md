@@ -3,6 +3,25 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-19 — banked time: first real move in the TSCP needle
+
+Chess-clock banking rig-side (chesstest.BankedClock, bridge -bank
+flag): unused per-move cycles carry forward, each move spends
+base + bank/8, bank capped at 8x base, total game time conserved
+(protocol (c) comparability). Predictive iteration gating is the
+enabler — honest early stops on easy moves now fund extra iterations
+on hard ones. 6502 driver port noted (24-bit zp bank, /8 = shifts).
+
+- Diagnostic 60-ply carryover game, realized depth: unbanked
+  d1:11 d2:30 d3:16 d4:3 → banked d1:3 d2:20 d3:22 d4:7 d5:2.
+  Depth-1 emergency stops nearly gone; depth >= 4 tripled.
+- **TSCP-d3, 30 games, -dither -bank: 1-24-5 = 11.7%** — the best
+  score yet against it (historical band 3.3-6.7%), and the first
+  post-change match to move in the predicted direction. n=30 keeps
+  the error bar wide (~±6%); the queued rating-pool gauntlet will
+  firm it up. Next depth levers: the mirror's LMR-parameter ranked
+  table, then its QS-shape verdicts.
+
 ## 2026-07-19 — pawnterm rank-bitmask + two latent bugs + Texel weights
 
 The restructure (per-file rank-occupancy bytes + gentables lookup
