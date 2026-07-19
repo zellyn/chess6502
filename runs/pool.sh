@@ -16,7 +16,15 @@ run() { # name, engine-args...
   ./cutechess-cli $ENG -engine name=$name "$@" $OPEN -rounds 15 -games 2 -repeat \
     -pgnout pgn/pool_${TAG}_${name}.pgn 2>&1 | grep -E 'Score of' | tail -1
 }
-run TSCP-d3   cmd=./tscp proto=xboard st=2 depth=3
+# TSCP is xboard protocol v1 with no setboard: it cannot start from a
+# book position (it plays from startpos regardless and forfeits as
+# "illegal move"). It runs bookless; -dither provides game variety.
+runbookless() {
+  local name=$1; shift
+  ./cutechess-cli $ENG -engine name=$name "$@" -rounds 15 -games 2 -repeat \
+    -pgnout pgn/pool_${TAG}_${name}.pgn 2>&1 | grep -E 'Score of' | tail -1
+}
+runbookless TSCP-d3 cmd=./tscp proto=xboard st=2 depth=3
 run FairyMax  cmd=./fairymax proto=xboard st=2
 run NEG       cmd=./neg proto=xboard st=2
 run minnow    cmd=./minnow proto=uci st=2
