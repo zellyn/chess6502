@@ -3,6 +3,44 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — the "LMR depth collapse" that wasn't; honest abort reporting
+
+The first post-LMR TSCP-d3 match (2-28-0, pgn/…_lmr.pgn) looked like a
+regression: PGN depths showed 2-3 where the pre-LMR match had shown 4.
+Diagnosis with the new PC-cycle profiler (harness.RunProfile /
+chesstest.RunProfiled) and a per-move depth-logging carryover game
+(internal/sprt TestDebugDepthGame) found **no regression**:
+
+- Head-to-head on identical positions/seeds, the f2-era build realizes
+  depth 1-3 in middlegames at 30 emulated s — same as current; the
+  current build hard-aborts *less* (4 vs 9 times in the 60-ply
+  diagnostic game). Cold budget searches: 0x1F ≈ 0x0F, sometimes
+  cheaper. Dither: no effect (seed 0 vs 17 within noise). No re-search
+  storms in the profile.
+- The "depth 4" belief came from two reporting bugs: on hard abort the
+  driver reported CURDEPTH = the *aborted* iteration (one more than
+  completed) and left the abort dummy score in SCORE — hence PGN lines
+  like "0.00/5" while dead lost. Both fixed: the driver now restores
+  the last completed iteration's score (PREVSC0/1) and decrements
+  CURDEPTH on the abort-fallback path.
+- Match scores agree: f2-era 0-18-2 (5.0%), first LMR match 2-28-0
+  (6.7%), post-fix rerun 0-27-3 (5.0%, pgn/…_lmr2.pgn). All the same
+  within noise — TSCP-d3 simply outclasses us at this budget.
+- −87% fixed-depth win re-confirmed post-fix: 0x0F 5,502M vs 0x1F
+  718M at depth 6.
+
+What the diagnosis exposed as the REAL costs (next levers):
+1. **QS is the iteration floor**: at CURDEPTH 2-3, 60-95% of cycles sit
+   at plies 5-14 — quiescence trees, which LMR cannot touch. Iteration
+   costs are QS-dominated and erratic; that's why realized depth stalls
+   at 2-3 regardless of full-width improvements. Candidates: qs ply
+   cap, deep-qs recapture-only, SEE-ish pruning.
+2. **Hard aborts waste ~45M cycles** on ~25% of middlegame moves (2x
+   budget spent, aborted iteration discarded). Predictive iteration
+   gating (spent + est(next) vs limit) would reclaim most of it.
+3. **pawnterm is ~9-12% of total cycles** in real games — promotes the
+   rank-bitmask restructure from "nice to have" to "next batch".
+
 ## 2026-07-18 — PVS + LMR (FT_LMR): −87% depth-6 tree
 
 PVS zero-window scouts after the first legal move, with LMR on late
