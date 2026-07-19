@@ -3,6 +3,26 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-18 — time-management campaign, items 1-2 (gating, generateq)
+
+1. **Predictive iteration gating + mate-stop** (driver): start iteration
+   N+1 only if now + 2x(last iteration's cost) fits the budget; stop
+   deepening once a winning mate is exact. Diagnostic game: hard aborts
+   13 → 11 of 60 moves, avg think 37M → 32M cycles at the same realized
+   depths; mate-in-2 budget search 20M → 2.6M cycles. TSCP-d3 at 30
+   games: 0-28-2 (3.3%) vs the 5.0-6.7% band of the previous three
+   matches — within noise, and as predicted the honest stops don't gain
+   strength at a fixed per-move budget: the savings must be BANKED
+   (carry unspent cycles into later moves) to convert into Elo. Banked
+   time is the queued follow-up.
+2. **generateq** (compile-time captures-only movegen copy, GENCAPS
+   retired): behavior-identical (perft/WAC/torture/ckverify green),
+   honest measurement only ~0.5% at fixed depth on capture-dense
+   positions — the win is structural plus a few percent on quiet ones.
+3. **QS profile** (new TestQSProfile): qs = 85-93% of all cycles;
+   pawnterm ≈ 13-14% of total (retriggered by every qs pawn capture);
+   movegen walks 9-23%. pawnterm rank-bitmask restructure is item 3.
+
 ## 2026-07-18 — the "LMR depth collapse" that wasn't; honest abort reporting
 
 The first post-LMR TSCP-d3 match (2-28-0, pgn/…_lmr.pgn) looked like a
