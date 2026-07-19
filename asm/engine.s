@@ -39,7 +39,6 @@ ldloop: lda (ZPTR),y
         lda #0
         sta PSP0
         sta PSP1
-        sta GENCAPS
         sta ABORT
         sta NODECNT
         jsr evalinit

@@ -110,7 +110,7 @@ PSQSQ     = $D8         ; psqt: square (possibly rank-flipped)
 PSQPIECE  = $D9         ; psqt: piece byte
 MULCNT    = $DA         ; multiply loop counter
 MAXDEPTH  = $DB         ; full-width search depth; qs beyond (poked by rig)
-GENCAPS   = $DC         ; movegen: nonzero = emit captures/ep/promos only
+; $DC free (was GENCAPS; qs uses the compile-time generateq copy)
 HASH0     = $DD         ; 32-bit incremental Zobrist hash
 HASH1     = $DE
 HASH2     = $DF

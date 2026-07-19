@@ -12,7 +12,8 @@
 ; after pass 0.
 
 ; ---------------------------------------------------------------
-; gennode: set base/cursor from MSP, generate, set end.
+; gennode: set base/cursor from MSP, generate, set end. QS capture
+; nodes use the specialized captures-only generator copy.
 ; ---------------------------------------------------------------
 gennode:
         ldy PLY
@@ -22,8 +23,12 @@ gennode:
         lda MSP+1
         sta PLYBASEHI,y
         sta CURSORHI,y
-        jsr generate
-        ldy PLY
+        lda QSKIND,y
+        beq :+
+        jsr generateq
+        jmp gennd2
+:       jsr generate
+gennd2: ldy PLY
         lda MSP
         sta PLYENDLO,y
         lda MSP+1
@@ -547,12 +552,7 @@ unmakenull:
         sta HASH3
         rts
 
-snode:  ldy PLY
-        lda QSKIND,y            ; qs capture-only nodes generate only captures
-        sta GENCAPS
-        jsr gennode
-        lda #0
-        sta GENCAPS
+snode:  jsr gennode             ; picks generate/generateq via QSKIND
         ; initial pass: 0 (TT move first) when we have one and this is
         ; not a qs-capture node; else straight to pass 1
         ldy PLY
