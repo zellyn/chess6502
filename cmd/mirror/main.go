@@ -28,6 +28,8 @@ func main() {
 		tune(os.Args[2:])
 	case "match":
 		match(os.Args[2:])
+	case "pgnrows":
+		pgnrows(os.Args[2:])
 	default:
 		usage()
 	}
@@ -35,11 +37,40 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: mirror <command> [flags]
-  nodes   fixed-depth node counts by feature mask
-  gen     self-play a chunk of games, appending labeled rows to -data
-  tune    Texel-tune pstruct weights from a -data file
-  match   self-play match between weight/feature configurations`)
+  nodes    fixed-depth node counts by feature mask
+  gen      self-play a chunk of games, appending labeled rows to -data
+  tune     Texel-tune pstruct weights from a -data file
+  match    self-play match between weight/feature configurations
+  pgnrows  extract quiet labeled rows from PGN files into -data`)
 	os.Exit(2)
+}
+
+// pgnrows extracts quiet, labeled training rows from external-opponent
+// PGNs (the rating-pool gauntlet games) and appends them to -data, so
+// the Texel corpus gains non-self-play material.
+func pgnrows(args []string) {
+	fs := flag.NewFlagSet("pgnrows", flag.ExitOnError)
+	data := fs.String("data", "texel.rows", "row file to append to")
+	everyN := fs.Int("every", 1, "keep every Nth qualifying quiet position")
+	fs.Parse(args)
+	paths := fs.Args()
+	if len(paths) == 0 {
+		fmt.Fprintln(os.Stderr, "pgnrows: no PGN files given")
+		os.Exit(2)
+	}
+	var total mirror.PGNStats
+	for _, p := range paths {
+		samples, st, err := mirror.PGNSamples(p, *everyN)
+		check(err)
+		check(mirror.AppendRows(*data, mirror.SampleRows(samples)))
+		fmt.Printf("  %-40s games %3d  skipped %3d  samples %5d\n",
+			p, st.Games, st.Skipped, st.Samples)
+		total.Games += st.Games
+		total.Skipped += st.Skipped
+		total.Samples += st.Samples
+	}
+	fmt.Printf("total: games %d, skipped %d, samples %d appended to %s\n",
+		total.Games, total.Skipped, total.Samples, *data)
 }
 
 func nodes(args []string) {

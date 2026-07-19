@@ -2,7 +2,9 @@ package mirror
 
 import (
 	"bufio"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -101,15 +103,27 @@ func AppendRows(path string, rows []Row) error {
 	return f.Close()
 }
 
-// LoadRows reads a data file written by AppendRows.
+// LoadRows reads a data file written by AppendRows. A gzip-compressed
+// file (magic 0x1f 0x8b, e.g. the checked-in testdata corpus) is
+// transparently decompressed.
 func LoadRows(path string) ([]Row, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	var src io.Reader = bufio.NewReader(f)
+	magic, err := src.(*bufio.Reader).Peek(2)
+	if err == nil && magic[0] == 0x1f && magic[1] == 0x8b {
+		gz, err := gzip.NewReader(src)
+		if err != nil {
+			return nil, err
+		}
+		defer gz.Close()
+		src = gz
+	}
 	var rows []Row
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(src)
 	for sc.Scan() {
 		var r Row
 		vals := []any{&r.R, &r.Base}

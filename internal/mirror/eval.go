@@ -21,12 +21,30 @@ var DefaultWeights = Weights{
 	OpenFile: 10,
 }
 
-// TunedWeights is the Texel-tuned set: 101,202 quiet positions from
-// 3,340 depth-5 self-play games (2026-07-18, sigmoid K=0.80, loss
-// 0.100471 -> 0.100142). Notable vs DefaultWeights: passed-pawn
-// bonuses roughly doubled through the middle ranks, king-shield and
-// open-file terms shrunk to near-nothing.
+// TunedWeights is the Texel-tuned set on the DIVERSIFIED corpus:
+// 101,202 self-play quiet positions (2026-07-18) + 7,706 non-self-play
+// positions from the 210-game rating-pool gauntlet (2026-07-19,
+// testdata/texel-rows-2026-07-19.gz, sigmoid K=0.85, loss
+// 0.103935 -> 0.103650). Folding in real-opponent games pulled the
+// advanced passed-pawn bonuses down ~20-25% (self-play overvalues
+// passed pawns, both sides pushing symmetrically) and the isolated
+// penalty from 10 to 7; bootstrap 95% CIs put passed4/5/6 and isolated
+// clearly outside the old self-play values. A depth-6 self-play A/B vs
+// the old self-play-tuned set was +21 +/- 39 (home-field bias favors
+// the incumbent, so neutral-to-positive here is a real endorsement).
+// SelfPlayTunedWeights keeps the prior set for reference.
 var TunedWeights = Weights{
+	Doubled:  14,
+	Isolated: 7,
+	Passed:   [8]int{0, 15, 0, 21, 50, 52, 20, 0},
+	Shield:   2,
+	OpenFile: 3,
+}
+
+// SelfPlayTunedWeights is the prior Texel set from self-play data only
+// (2026-07-18, K=0.80). Retained as the reference point the diversified
+// corpus moved away from.
+var SelfPlayTunedWeights = Weights{
 	Doubled:  12,
 	Isolated: 10,
 	Passed:   [8]int{0, 18, 0, 33, 62, 69, 28, 0},

@@ -3,6 +3,47 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-19 — Texel corpus diversification (task #23 remainder)
+
+Folded the 210-game rating-pool gauntlet (non-self-play: vs TSCP-d3,
+FairyMax, NEG, minnow, SF-n10/n100/n1000; tools/pgn/pool_c96f604_*.pgn)
+into the Texel corpus. New pipeline: `mirror pgnrows` extracts quiet,
+non-check, labeled positions from PGNs (mirror.PGNSamples in pgn.go,
+honoring [FEN] setup headers from openings-pool.epd); LoadRows now reads
+gzip transparently. 210 games → 7,706 quiet rows on top of 101,202
+self-play rows = 108,908-row diversified corpus
+(testdata/texel-rows-2026-07-19.gz).
+
+Re-tune (K 0.80→0.85, loss 0.1005→0.1037 — pool labels are noisier/more
+decisive). Bootstrap B=200 95% CIs on the combined corpus, flagging any
+weight whose old self-play value falls outside the CI:
+
+| weight   | self→comb | 95% CI      | moved? |
+|----------|-----------|-------------|--------|
+| doubled  | 12 → 14   | [11, 18]    | no     |
+| isolated | 10 → 7    | [6, 9]      | **yes**|
+| passed2  | 18 → 15   | [9, 23]     | no     |
+| passed4  | 33 → 21   | [16, 27]    | **yes**|
+| passed5  | 62 → 50   | [44, 58]    | **yes**|
+| passed6  | 69 → 52   | [46, 63]    | **yes**|
+| passed7  | 28 → 20   | [15, 31]    | no     |
+| shield   | 3 → 2     | [0, 3]      | no     |
+| openfile | 4 → 3     | [0, 9]      | no     |
+
+Real movement: the advanced passed-pawn bonuses (ranks 4/5/6) drop
+~20-25% and the isolated penalty drops 10→7. Interpretation: self-play
+overvalues passed pawns (both sides push them symmetrically, so the
+label correlation inflates the bonus); diverse real-opponent games
+correct it downward. Validation A/B (depth 6, 200 games, diversified
+weights vs old self-play-tuned): **+21 ± 39** (+71 =70 −59, 53.0%) — the
+self-play match environment has home-field bias toward the incumbent, so
+neutral-to-positive here is a genuine (if sub-significant) endorsement.
+
+**Adopted** the diversified set as mirror `TunedWeights`
+(D14 I7 P[15,0,21,50,52,20] S2 O3; old set kept as
+`SelfPlayTunedWeights`). Asm-side port target updated; final
+confirmation is a rig-side pool match (deferred, not mirror work).
+
 ## 2026-07-19 — mirror verdicts: futility, LMR sweep, QS-shape (3 tasks)
 
 Three mirror A/B campaigns (internal/mirror/ab_test.go), all depth-6,

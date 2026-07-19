@@ -1,73 +1,11 @@
 package mirror
 
 import (
-	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
 )
-
-// sanToMove finds the unique legal move matching a SAN token.
-func sanToMove(eng *Engine, gp *Position, san string) (Move, error) {
-	san = strings.TrimRight(san, "+#")
-	legal := legalMoves(eng, gp)
-
-	if san == "O-O" || san == "O-O-O" {
-		toFile := byte(6)
-		if san == "O-O-O" {
-			toFile = 2
-		}
-		for _, m := range legal {
-			if m.Flags&FlCastle != 0 && m.To&0x07 == toFile {
-				return m, nil
-			}
-		}
-		return NoMove, fmt.Errorf("no castle %q", san)
-	}
-
-	promo := byte(0)
-	if i := strings.IndexByte(san, '='); i >= 0 {
-		promo = map[byte]byte{'N': Knight, 'B': Bishop, 'R': Rook, 'Q': Queen}[san[i+1]]
-		san = san[:i]
-	}
-	if len(san) < 2 {
-		return NoMove, fmt.Errorf("bad SAN %q", san)
-	}
-	to := (san[len(san)-1]-'1')<<4 | (san[len(san)-2] - 'a')
-	rest := san[:len(san)-2]
-	piece := byte(Pawn)
-	if len(rest) > 0 {
-		if t, ok := map[byte]byte{'K': King, 'Q': Queen, 'R': Rook, 'B': Bishop, 'N': Knight}[rest[0]]; ok {
-			piece = t
-			rest = rest[1:]
-		}
-	}
-	rest = strings.TrimSuffix(rest, "x")
-
-	var found []Move
-	for _, m := range legal {
-		if m.To != to || gp.Board[m.From]&TypeMask != piece || m.Flags&FlPromo != promo {
-			continue
-		}
-		ok := true
-		for _, c := range []byte(rest) {
-			switch {
-			case c >= 'a' && c <= 'h':
-				ok = ok && m.From&0x07 == c-'a'
-			case c >= '1' && c <= '8':
-				ok = ok && m.From>>4 == c-'1'
-			}
-		}
-		if ok {
-			found = append(found, m)
-		}
-	}
-	if len(found) != 1 {
-		return NoMove, fmt.Errorf("SAN %q: %d matches", san, len(found))
-	}
-	return found[0], nil
-}
 
 // pgnMidgameFENs replays games from a cutechess PGN and returns FENs at
 // the given plies.
