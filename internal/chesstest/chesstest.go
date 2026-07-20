@@ -171,7 +171,14 @@ func NewMachine(bin []byte, defs Defs, pos *Position, depth byte, cout io.Writer
 		return nil, err
 	}
 	board := defs["BOARD"]
-	copy(m.Mem.Main[board:board+128], pos.Board[:])
+	// Write only the 64 real squares. The 0x88 board's 64 off-board bytes
+	// (files 8-F of each rank) are deliberately left untouched so they stay
+	// available as engine scratch - see the off-board dead-space contract at
+	// BOARD in defs.inc. The engine never reads off-board, so this is exact.
+	for rank := uint16(0); rank < 8; rank++ {
+		base := rank * 16
+		copy(m.Mem.Main[board+base:board+base+8], pos.Board[base:base+8])
+	}
 	psq := defs["PIECESQ"]
 	copy(m.Mem.Main[psq:psq+32], pos.PieceSq[:])
 	m.Mem.Main[defs["SIDE"]] = pos.Side
