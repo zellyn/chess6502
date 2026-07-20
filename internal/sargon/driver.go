@@ -153,7 +153,14 @@ func (m *Machine) RequestMove(move string, budgetCycles uint64) (MoveResult, err
 	if err != nil {
 		return res, err
 	}
+	_ = prevReply
 	thinkStart := m.Cycles()
+
+	// Commit detection uses Sargon's whole move-list column text, which changes
+	// ONLY when Sargon commits a move — its internal search scribbles the
+	// $60-$7F piece list but never the move-list text, so this avoids both
+	// mid-search RAM garbage and repeated-token ambiguity.
+	prevCol := m.sargonColumnText()
 
 	// Spend the budget, watching for an early opening-book reply.
 	book := false
@@ -161,18 +168,14 @@ func (m *Machine) RequestMove(move string, budgetCycles uint64) (MoveResult, err
 		if err := m.Run(pollChunk); err != nil {
 			return res, err
 		}
-		if tok := m.scrapeReplyText(); tok != "" && tok != prevReply {
+		if m.sargonColumnText() != prevCol {
 			book = true
 			break
 		}
 	}
 	if !book {
 		m.ForceMove() // CTRL-T: play best move so far
-		// Detect the committed move via Sargon's half of the piece list
-		// (robust to repeated move-list tokens, which defeat screen-text
-		// detection in shuffle/repetition positions). Reliable because Easy
-		// Mode stops Sargon pondering once it has moved.
-		if !m.waitSargonMove(mid, 12_000_000) {
+		if !m.waitSargonCommit(prevCol, 12_000_000) {
 			res.ThinkCycles = m.Cycles() - thinkStart
 			res.Message, res.GameOver = m.scrapeMessage()
 			if res.GameOver {
@@ -183,6 +186,45 @@ func (m *Machine) RequestMove(move string, budgetCycles uint64) (MoveResult, err
 	}
 	res.ThinkCycles = m.Cycles() - thinkStart
 	return m.decodeReply(res, mid), nil
+}
+
+// sargonColumnText returns Sargon's entire move-list column (all rows,
+// concatenated) — the left column when Sargon plays White, else the right. This
+// text changes only when Sargon commits a move (its search is internal), so a
+// change is a reliable commit signal, robust to repeated move tokens and to
+// scrolling (a new row alters the multi-row string even if the token repeats).
+func (m *Machine) sargonColumnText() string {
+	lo, hi := 22, 30 // Sargon Black -> right column
+	if m.SargonWhite {
+		lo, hi = 10, 18
+	}
+	var sb strings.Builder
+	for r := 10; r < 24; r++ {
+		row := m.TextRow(r)
+		if len(row) >= hi {
+			sb.WriteString(row[lo:hi])
+		}
+		sb.WriteByte('|')
+	}
+	return sb.String()
+}
+
+// waitSargonCommit polls up to maxSteps until Sargon's move-list column changes
+// from prev (a committed move), then settles briefly so the piece list is fully
+// updated. Returns whether a commit was seen.
+func (m *Machine) waitSargonCommit(prev string, maxSteps uint64) bool {
+	var steps uint64
+	for steps < maxSteps {
+		if err := m.Run(pollChunk); err != nil {
+			return false
+		}
+		steps += pollChunk
+		if m.sargonColumnText() != prev {
+			m.Run(1_000_000) // let the piece list finish updating
+			return true
+		}
+	}
+	return false
 }
 
 // sargonHalf returns the 16 piece-square bytes belonging to Sargon (white half
@@ -363,13 +405,13 @@ func (m *Machine) StartAsWhite(budgetCycles uint64) (MoveResult, error) {
 	var res MoveResult
 	mid := m.ReadPieceList() // initial position
 	m.SargonWhite = true
-	prevReply := m.scrapeReplyText() // Sargon's (White, left) column; empty at start
-	m.Key(0x13)                      // CTRL-S: Sargon plays the side to move (White)
+	prevCol := m.sargonColumnText() // Sargon's (White, left) column; empty at start
+	m.Key(0x13)                     // CTRL-S: Sargon plays the side to move (White)
 	thinkStart := m.Cycles()
 
 	if budgetCycles == 0 {
 		// Level mode: wait for Sargon's natural (timed-level) opening move.
-		if !m.waitReply(prevReply, 80_000_000) {
+		if !m.waitSargonCommit(prevCol, 80_000_000) {
 			return res, fmt.Errorf("no opening move from sargon-as-white (level mode)")
 		}
 	} else {
@@ -378,14 +420,14 @@ func (m *Machine) StartAsWhite(budgetCycles uint64) (MoveResult, error) {
 			if err := m.Run(pollChunk); err != nil {
 				return res, err
 			}
-			if tok := m.scrapeReplyText(); tok != "" && tok != prevReply {
+			if m.sargonColumnText() != prevCol {
 				book = true
 				break
 			}
 		}
 		if !book {
 			m.ForceMove() // CTRL-T
-			if !m.waitSargonMove(mid, 12_000_000) {
+			if !m.waitSargonCommit(prevCol, 12_000_000) {
 				res.ThinkCycles = m.Cycles() - thinkStart
 				res.Message, res.GameOver = m.scrapeMessage()
 				return res, fmt.Errorf("no opening move from sargon-as-white")

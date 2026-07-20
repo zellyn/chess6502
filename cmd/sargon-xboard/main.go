@@ -228,17 +228,36 @@ func (e *engine) thinkFirstWhite() {
 		e.resign()
 		return
 	}
-	e.send("move %s", e.replyCoord(res))
+	reply := e.replyCoord(res)
+	if reply == "" {
+		log.Printf("sargon-as-white: no decodable opening move (msg=%q)", res.Message)
+		e.claimGameOver(res)
+		return
+	}
+	e.send("move %s", reply)
 }
 
-// resign ends the game by resigning for Sargon's side (a valid claim, unlike a
-// mate claim). Used only as a fallback when a move can't be read, to avoid
-// deadlocking the match.
+// claimGameOver ends the game when Sargon has no move to give. If Sargon
+// reports a draw (3-fold/50-move/stalemate) we claim a draw; otherwise (Sargon
+// is mated, or a rare unrecoverable read failure) we resign for Sargon's side.
+// Draw/resign claims are safe (unlike a mate claim, which cutechess rejects if
+// the position isn't actually mate).
+func (e *engine) claimGameOver(res sargon.MoveResult) {
+	msg := strings.ToUpper(res.Message)
+	if strings.Contains(msg, "DRAW") || strings.Contains(msg, "STALEMATE") {
+		e.send("1/2-1/2 {SargonIII: %s}", res.Message)
+		return
+	}
+	e.resign()
+}
+
+// resign resigns for Sargon's side (a valid claim). Used when Sargon is mated
+// or a move can't be read, to end the game rather than deadlock the match.
 func (e *engine) resign() {
 	if e.m != nil && e.m.SargonWhite {
-		e.send("0-1 {SargonIII resigns: move-read failure}") // White resigns
+		e.send("0-1 {SargonIII resigns}") // White resigns
 	} else {
-		e.send("1-0 {SargonIII resigns: move-read failure}") // Black resigns
+		e.send("1-0 {SargonIII resigns}") // Black resigns
 	}
 }
 
@@ -335,6 +354,13 @@ func (e *engine) think(coord string) {
 		log.Printf("DECODE token=%q ram=%s-%s idx=%d think=%d -> %q gameover=%v msg=%q",
 			res.SargonText, mv.From.Algebraic(), mv.To.Algebraic(), mv.MovedIndex,
 			res.ThinkCycles, reply, res.GameOver, res.Message)
+	}
+	if reply == "" {
+		// No decodable move: Sargon reports the game over (draw/mate) or a rare
+		// read failure. Claim the correct result rather than emit a bad move.
+		log.Printf("no move for %q (gameover=%v msg=%q)", coord, res.GameOver, res.Message)
+		e.claimGameOver(res)
+		return
 	}
 
 	// Emit now unless we're in force mode, in which case hold the reply until
