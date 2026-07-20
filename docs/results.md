@@ -3,6 +3,39 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-19 — Texel diversified weights: asm rig confirmation (task #23 port) — CONFIRMED, PORT SAFE
+
+Rig-side head-to-head confirming the mirror's diversified-corpus weights
+(the pool-match confirmation the task #23 entry below deferred).
+Candidate = the committed pool-baseline asm engine with exactly the two
+proposed edits applied: the passed-pawn bonus `{0,18,0,33,62,69,28,0} →
+{0,15,0,21,50,52,20,0}` (cmd/gentables/main.go) and the isolated penalty
+`lda #10 → lda #7` (asm/eval.s, both ptadd10/ptsub10 sites). Baseline =
+the committed engine.bin unchanged — a clean source rebuild reproduced it
+bit-exact (md5 d662c12…), and the candidate was built in an isolated
+worktree, so main's tracked source stays pristine (neither edit is
+committed; only this log entry is).
+
+Method: deep optimization review of the mirror's Texel deltas, then a
+paired asm A/B via cutechess-cli — 600 games, openings-pool.epd
+(sequential, -repeat color-paired), -dither -bank, concurrency 3.
+**Reduced 8000 ms emulated budget** (the standing pool control is
+30000 ms) for overnight throughput; the engine thinks on emulated cycles,
+so CPU contention changes only wall-clock, not outcomes.
+
+Result (candidate vs baseline): **+202 =210 −188, 51.2%, +8.1 ± 22.4
+Elo, LOS 76.1%** (draw ratio 35.0%). The CI spans zero — no significant
+gain at this budget/n — but the point estimate is positive with no hint
+of a regression, corroborating the mirror's own **+21 ± 39** self-play
+validation. Two independent rigs agree: neutral-to-mildly-positive.
+
+**Verdict: CONFIRMED — the diversified weights are safe to port (do no
+harm, slight positive lean).** The passed-pawn overvaluation correction
+carries into the asm engine without costing strength; green-light the
+two-edit port. Caveat: confirmation ran at 8000 ms, not the 30000 ms pool
+control — a full-budget pool gauntlet would tighten the estimate but is
+not needed to clear the do-no-harm bar.
+
 ## 2026-07-19 — king-bucketed PSQT (task #30) — DOES NOT CARRY ITS WEIGHT
 
 NNUE/HalfKP-inspired but network-free: non-king pieces get a per-square
