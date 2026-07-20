@@ -2,6 +2,13 @@ package sargon
 
 import "strings"
 
+// Sargon III stays in TEXT mode unless ESC is pressed (ESC toggles to the
+// hi-res graphical board). The driver must therefore NEVER send ESC: keeping
+// Sargon in text mode means its move list, prompts, and messages sit in text
+// page 1 ($400-$7FF) as readable ASCII we scrape here — the graphical board
+// would be hi-res pixels, far harder to parse. Text scraping is the primary,
+// always-reliable read path; the in-RAM piece list ($60-$7F) is the cross-check.
+
 // textRowBase returns the base address in text page 1 ($400-$7FF) for the
 // given screen row (0-23), using the Apple II's interleaved layout:
 //

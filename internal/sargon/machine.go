@@ -109,6 +109,13 @@ func (m *Machine) RunUntil(maxSteps uint64, pred func(*Machine) bool) (ok bool, 
 	return false, nil
 }
 
+// Cycles returns the cycle-accurate CPU clock (one tick per 6502 cycle),
+// advancing ~1.0205e6 per emulated second. Use this — not Steps, which counts
+// instructions — for timing Sargon's per-move cost.
+func (m *Machine) Cycles() uint64 {
+	return m.A2.Cycles()
+}
+
 // Peek reads a byte of Apple II main RAM ($0000-$BFFF).
 func (m *Machine) Peek(addr uint16) byte {
 	return m.A2.RamRead(addr)

@@ -81,6 +81,16 @@ func (m *Machine) EasyMode() error {
 	return m.Run(pollChunk)
 }
 
+// ForceMove sends CTRL-T (Terminate Search), forcing Sargon to play its best
+// move so far immediately. Needed to make Sargon move on the Infinite level
+// (SHIFT-9); not used for timed matches.
+func (m *Machine) ForceMove() {
+	m.Key(0x14) // CTRL-T
+}
+
+// CyclesPerSecond is Sargon's effective 6502 clock (Apple II ~1.0205 MHz).
+const CyclesPerSecond = 1_020_500
+
 // MoveResult describes the outcome of submitting a player move.
 type MoveResult struct {
 	// SargonMove is Sargon's reply, decoded from the piece-list diff.
@@ -94,6 +104,11 @@ type MoveResult struct {
 	GameOver bool
 	// Board is the RAM piece list read once Sargon returned to idle.
 	Board PieceList
+	// ThinkCycles is the cycle-accurate CPU cost Sargon spent producing this
+	// reply: from just after our move was accepted until its reply appeared.
+	// At 1.0205 MHz, seconds = ThinkCycles / 1_020_500. Book moves are ~free;
+	// out-of-book middlegame moves reflect the level's real per-move budget.
+	ThinkCycles uint64
 }
 
 // SubmitMove types a player move (e.g. "E2-E4", or "E4-D5" for a capture; add
@@ -106,51 +121,109 @@ type MoveResult struct {
 // illegal or no reply appears in time.
 func (m *Machine) SubmitMove(move string, maxThinkSteps uint64) (MoveResult, error) {
 	var res MoveResult
-	move = strings.ToUpper(strings.TrimSpace(move))
+	mid, prevReply, err := m.enterMove(move)
+	if err != nil {
+		return res, err
+	}
+	thinkStart := m.Cycles()
+	replied := m.waitReply(prevReply, maxThinkSteps)
+	res.ThinkCycles = m.Cycles() - thinkStart
+	if !replied {
+		res.Message, res.GameOver = m.scrapeMessage()
+		if res.GameOver {
+			return res, nil // mate/stalemate: our move ended the game
+		}
+		return res, fmt.Errorf("no reply from sargon within %d steps after move %q", maxThinkSteps, move)
+	}
+	return m.decodeReply(res, mid), nil
+}
 
-	// Parse the from/to squares so we can confirm our own move actually
-	// registered (keystrokes are occasionally dropped, and without this check
-	// a stale piece-list change would be mistaken for Sargon's reply, causing
-	// desync). move is "E2-E4" or "E4XD5" (we accept '-' or 'X'); a trailing
-	// promotion letter is ignored for the square parse.
+// RequestMove is the fair-match primitive: it enters the opponent's move, gives
+// Sargon exactly budgetCycles of thinking on the Infinite level (SHIFT-9, set
+// via InfiniteLevel), then forces the move with CTRL-T and returns Sargon's
+// reply. This puts per-move compute entirely under our control — symmetric and
+// reproducible with our own cycle-budgeted engine — instead of trusting
+// Sargon's self-estimated, time-banked level timer.
+//
+// If Sargon answers from its opening book before the budget elapses (an instant
+// "free" move), that reply is returned unchanged with ThinkCycles ~= 0.
+func (m *Machine) RequestMove(move string, budgetCycles uint64) (MoveResult, error) {
+	var res MoveResult
+	mid, prevReply, err := m.enterMove(move)
+	if err != nil {
+		return res, err
+	}
+	thinkStart := m.Cycles()
+
+	// Spend the budget, watching for an early opening-book reply.
+	book := false
+	for m.Cycles()-thinkStart < budgetCycles {
+		if err := m.Run(pollChunk); err != nil {
+			return res, err
+		}
+		if tok := m.scrapeReplyText(); tok != "" && tok != prevReply {
+			book = true
+			break
+		}
+	}
+	if !book {
+		m.ForceMove() // CTRL-T: play best move so far
+		if !m.waitReply(prevReply, 12_000_000) {
+			res.ThinkCycles = m.Cycles() - thinkStart
+			res.Message, res.GameOver = m.scrapeMessage()
+			if res.GameOver {
+				return res, nil
+			}
+			return res, fmt.Errorf("no reply after CTRL-T for move %q", move)
+		}
+	}
+	res.ThinkCycles = m.Cycles() - thinkStart
+	return m.decodeReply(res, mid), nil
+}
+
+// enterMove settles, types the player move, and confirms it registered (the
+// mover's white piece reaches the destination square), retrying a dropped or
+// garbled entry. It returns the piece list just after our move (mid) and the
+// SARGON move-list token before Sargon replies (prevReply).
+//
+// move is "E2-E4" or "E4XD5" (separator '-' or 'X'); a trailing promotion
+// letter (e.g. "E7-E8N") is allowed and ignored for the square parse.
+func (m *Machine) enterMove(move string) (mid PieceList, prevReply string, err error) {
+	move = strings.ToUpper(strings.TrimSpace(move))
 	from, to, ok := parseFromTo(move)
 	if !ok {
-		return res, fmt.Errorf("cannot parse move %q", move)
+		return mid, "", fmt.Errorf("cannot parse move %q", move)
 	}
 
 	// Settle: after moving, Sargon redraws before returning to its keyboard
 	// loop; typing during that window drops characters.
 	if err := m.Run(3_000_000); err != nil {
-		return res, err
+		return mid, "", err
 	}
 
 	before := m.ReadPieceList()
 	fromIdx := whiteIndexAt(before, from)
 	if fromIdx < 0 {
-		return res, fmt.Errorf("no white piece on %s for move %q", from.Algebraic(), move)
+		return mid, "", fmt.Errorf("no white piece on %s for move %q", from.Algebraic(), move)
 	}
 
-	// Type the move, then confirm it registered (white mover now on `to`).
-	// Retry on a dropped/garbled entry, clearing the input line first.
 	const stepsPerKey = 200_000
 	accepted := false
 	for attempt := 0; attempt < 4 && !accepted; attempt++ {
 		if attempt > 0 {
-			// Clear a partial/garbled entry: Return submits & rejects it,
-			// re-prompting an empty field.
+			// Clear a partial/garbled entry: Return submits & rejects it.
 			m.Key(0x0D)
 			if err := m.Run(1_500_000); err != nil {
-				return res, err
+				return mid, "", err
 			}
 		}
 		if err := m.TypePaced(move+"\r", stepsPerKey); err != nil {
-			return res, err
+			return mid, "", err
 		}
-		// Wait up to ~4M cycles for our white piece to land on `to`.
 		var s uint64
 		for s < 4_000_000 {
 			if err := m.Run(pollChunk); err != nil {
-				return res, err
+				return mid, "", err
 			}
 			s += pollChunk
 			if Square(m.A2.RamRead(uint16(WhiteListAddr+fromIdx))) == to {
@@ -160,42 +233,34 @@ func (m *Machine) SubmitMove(move string, maxThinkSteps uint64) (MoveResult, err
 		}
 	}
 	if !accepted {
-		return res, fmt.Errorf("move %q not accepted after retries (screen: %q)", move, m.messageLine())
+		return mid, "", fmt.Errorf("move %q not accepted after retries (screen: %q)", move, m.messageLine())
 	}
+	return m.ReadPieceList(), m.scrapeReplyText(), nil
+}
 
-	// Snapshot after our move applied (captures any black piece we took).
-	// Sargon rewrites the $60-$7F piece list in place during its search, so
-	// the list is only trustworthy when Sargon is idle at the input prompt.
-	// The authoritative "Sargon has replied" signal is therefore the text
-	// move-list: wait until a new token appears in the SARGON column.
-	mid := m.ReadPieceList()
-	prevReply := m.scrapeReplyText()
-
+// waitReply polls up to maxThinkSteps CPU steps for a new SARGON move token to
+// appear (different from prevReply), returning whether one did. The text
+// move-list is authoritative; the $60-$7F piece list is search scratch while
+// Sargon thinks and is only trusted once idle (see decodeReply).
+func (m *Machine) waitReply(prevReply string, maxThinkSteps uint64) bool {
 	var steps uint64
-	replied := false
 	for steps < maxThinkSteps {
 		if err := m.Run(pollChunk); err != nil {
-			return res, err
+			return false
 		}
 		steps += pollChunk
 		if tok := m.scrapeReplyText(); tok != "" && tok != prevReply {
-			replied = true
-			break
+			return true
 		}
 	}
-	if !replied {
-		res.Message, res.GameOver = m.scrapeMessage()
-		if res.GameOver {
-			return res, nil // mate/stalemate: our move ended the game
-		}
-		return res, fmt.Errorf("no reply from sargon within %d steps after move %q", maxThinkSteps, move)
-	}
+	return false
+}
 
-	// Let Sargon fully return to the idle input loop before trusting the
-	// piece list, then decode the board from RAM as a cross-check.
-	if err := m.Run(2_000_000); err != nil {
-		return res, err
-	}
+// decodeReply, called once a reply token is on screen, settles to idle then
+// fills the move text, RAM-decoded move, board, and any status message.
+func (m *Machine) decodeReply(res MoveResult, mid PieceList) MoveResult {
+	// Let Sargon fully return to the idle input loop before trusting the list.
+	m.Run(2_000_000)
 	res.SargonText = m.scrapeReplyText()
 	after := m.ReadPieceList()
 	if mv, ok := DiffMove(mid, after, true /* black */); ok {
@@ -203,7 +268,14 @@ func (m *Machine) SubmitMove(move string, maxThinkSteps uint64) (MoveResult, err
 	}
 	res.Board = after
 	res.Message, res.GameOver = m.scrapeMessage()
-	return res, nil
+	return res
+}
+
+// InfiniteLevel puts Sargon on the Infinite analysis level (SHIFT-9). Combined
+// with RequestMove (CTRL-T after a chosen cycle budget) it gives fully
+// controlled, reproducible per-move compute. Call on the player's turn.
+func (m *Machine) InfiniteLevel() error {
+	return m.Level(9)
 }
 
 // parseFromTo extracts the from/to squares from a move like "E2-E4", "E4XD5",

@@ -90,6 +90,50 @@ Easy Mode also makes per-move timing ponder-free and reproducible, which
 matches. Per the manual it roughly halves effective strength at a given level,
 so pick the level with that in mind. The driver defaults Easy Mode on.
 
+## Fair-match timing: infinite mode + CTRL-T at our cycle budget (PRIMARY)
+
+Sargon's levels are **average** per-move targets and it **banks time** (instant
+opening-book moves fund longer thinks later — the same idea as our BankedClock),
+and it only **estimates** seconds (the Apple has no real-time clock, so it
+counts a software loop). Matching its self-managed timer is therefore fragile.
+
+The robust, reproducible mechanism is to **take the clock away from Sargon**:
+put it on the **Infinite** level (SHIFT-9) and force the move ourselves with
+**CTRL-T** after exactly the number of 6502 cycles *we* choose — symmetric with
+our own cycle-budgeted engine and fully deterministic in the cycle-accurate
+emulator. This is `Machine.RequestMove(move, budgetCycles)` (set the level once
+with `InfiniteLevel()`).
+
+Cycle timing uses a new cycle-accurate clock added to goapple2
+(`Apple2.Cycles()`, one tick per 6502 cycle; **note our `Machine.Steps`/`Run`
+count instructions, not cycles**). `MoveResult.ThinkCycles` reports the cost
+Sargon spent on each reply. `CyclesPerSecond = 1_020_500` (≈1.0205 MHz), so a
+~30 s / ~30M-cycle budget matches our engine's standing budget.
+
+**Verified empirically (the make-or-break unknowns):**
+1. **CTRL-T plays a legal best-move-so-far**, not an abort: budgeting 30M cycles,
+   Sargon thought 31.65M then CTRL-T → legal capture `D5xC4`, board consistent.
+2. **Commit latency after CTRL-T ≈ 1.6M cycles** (~1.6 s); we detect the
+   committed move by the text move-list token changing, not a fixed delay.
+3. **Opening-book moves are handled**: in infinite mode a book reply appears on
+   its own before the budget elapses (e.g. `d7d5` at 1.29M cycles); `RequestMove`
+   returns it as-is (ThinkCycles ≈ 0) without needing CTRL-T.
+
+### Alternative mode: real tournament clock (cross-check)
+
+Set Sargon to SHIFT-3 (30 s/move avg = 60 moves / 30 min whole-game budget) and
+give our engine a matching 60-moves/30-min banked control, letting each side
+manage its own clock (exercises Sargon's own time management). Use once as a
+cross-check; the infinite + CTRL-T path stays primary.
+
+### Empirical shift-3 cost (Sargon self-estimates; measure in cycles)
+
+Level 3 ("30 s/move") in the emulator: an opening-book reply cost ~1.3M cycles;
+an out-of-book recapture cost ~10.3M cycles (~10 s) — **not** the nominal 30 s,
+confirming Sargon banks/averages rather than spending a fixed budget per move.
+So shift-3 is a rough quality anchor (an infinite + CTRL-T-at-~30M-cycle move
+should be ≈ shift-3 strength), but for a controlled match use the cycle budget.
+
 ## Levels and per-move time (manual p.18)
 
 Levels are selected with **SHIFT + digit** (ASCII `! @ # $ % ^ & * (` for 1-9),
@@ -138,14 +182,44 @@ go run ./cmd/sargon -boot 110000000 -script 'type:E2-E4\r; wait:8000000; dump'
 go run ./cmd/sargon -play 'E2-E4,D2-D4,B1-C3' -level 3
 ```
 
+## xboard adapter (`cmd/sargon-xboard`)
+
+`cmd/sargon-xboard` presents headless Sargon as an xboard (CECP) engine so
+cutechess-cli can pit it against another engine. It plays the side that moves
+**second** (run it as Black; Sargon's keyboard player is White): opponent moves
+arrive as `usermove e2e4`, are typed into Sargon, and Sargon's reply is emitted
+as `move e7e6` (coordinate notation from the RAM from/to squares).
+
+Key implementation points, learned the hard way:
+- **Boot in a goroutine** and **think in a goroutine** — Sargon's ~3 s boot and
+  multi-second search must not block the protocol loop, or cutechess declares a
+  stalled connection when its liveness `ping` goes unanswered.
+- **force/go handshake**: cutechess starts a Black engine with
+  `force; usermove <white1>; go`. Sargon replies as soon as it gets the
+  usermove, so the adapter computes the reply but **holds it until `go`**.
+- `-budget-cycles N` uses the fair mechanism (Infinite + CTRL-T at N cycles);
+  otherwise `-level`/`-easy` timed mode.
+
+**Smoke game played** (our engine White, fast budget, vs Sargon level 1 Black):
+a complete 78-ply game via cutechess-cli ending in checkmate (`39...Qh4#`,
+Sargon 0-1), with castling, captures and checks all handled correctly.
+
+```
+cutechess-cli \
+  -engine name=us cmd=./us proto=uci \
+  -engine name=SargonIII cmd="./sargon-xboard -budget-cycles 30000000" proto=xboard \
+  -each tc=inf -games 1 -pgnout smoke.pgn
+```
+
 ## Status / next steps
 
-Done: headless boot, screen scraping, keyboard move injection, reply parsing
-(text + RAM) for normal moves / captures / castling, board RE, level table.
+Done: headless boot; text-screen scraping; paced keyboard move injection; reply
+parsing (text + RAM) for normal moves / captures / castling; board RE
+(zero-page piece list); level table; **fair-match primitive `RequestMove`
+(Infinite + CTRL-T at a chosen cycle budget), verified**; cycle-accurate clock
+in goapple2; **xboard adapter with a completed cutechess smoke game**.
 
-Remaining stretch (task follow-up): wrap `internal/sargon` as an xboard/UCI
-adapter process so cutechess-cli can pit our engine vs Sargon, and play a smoke
-game. The adapter maps our engine's coordinates ↔ Sargon's `FROM-TO` text and
-uses `SubmitMove` per move. Special-move notation to map: castling (type king
-`E1-G1`, Sargon shows `0-0`), en passant (`PXPEP`), promotion (append piece
-letter to under-promote; Return promotes to queen).
+Follow-ups: run a real matched match (our engine vs Sargon, ~30M cycles/move
+both sides, from `tools/openings-pool.epd` positions) for an anchored strength
+estimate; optionally support Sargon-as-White (CTRL-S) and the tournament-clock
+cross-check mode; wire an openings book into the adapter for varied games.

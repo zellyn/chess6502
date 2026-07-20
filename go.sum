@@ -2,3 +2,5 @@ github.com/zellyn/go6502 v0.0.0-20260718001940-fd7649dc77b5 h1:tf9Kk0yKLMGWh7wz9
 github.com/zellyn/go6502 v0.0.0-20260718001940-fd7649dc77b5/go.mod h1:ZmI1dBBcL75bpqEtsLstsVESIMoA8K44Wr8IHPMY5Sg=
 github.com/zellyn/goapple2 v0.0.0-20260718002103-1579112ab4e6 h1:atcam5Nqe5M2WG5C7MWDzL+fZkWcTBEotfsAEZDWNBQ=
 github.com/zellyn/goapple2 v0.0.0-20260718002103-1579112ab4e6/go.mod h1:Va4vhC8liWQIOZFn5ri4ENX1ofmdBrXkdDau5m+Czic=
+github.com/zellyn/goapple2 v0.0.0-20260720022950-3d4e30cb6ccb h1:gsFQbM5IafApOtDFP1mNLQ5ml2QaX4aSHS2R1p6GC/c=
+github.com/zellyn/goapple2 v0.0.0-20260720022950-3d4e30cb6ccb/go.mod h1:Va4vhC8liWQIOZFn5ri4ENX1ofmdBrXkdDau5m+Czic=

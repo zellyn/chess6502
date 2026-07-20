@@ -68,6 +68,7 @@ func runScript(m *sargon.Machine, script string) {
 // printing Sargon's reply after each (decoded from RAM, cross-checked with the
 // on-screen move text) plus the RAM-derived board.
 var easyMode bool
+var budgetCycles uint64
 
 func playGame(m *sargon.Machine, level int, moves []string) {
 	fmt.Println("Booting to move-entry prompt...")
@@ -76,35 +77,52 @@ func playGame(m *sargon.Machine, level int, moves []string) {
 	}
 	fmt.Printf("Ready after %d steps. Initial board from RAM:\n%s", m.Steps, m.ReadPieceList().Board())
 
-	if level != 1 {
+	if budgetCycles > 0 {
+		// Fair-match mechanism: Infinite level + CTRL-T after our cycle budget.
+		if err := m.InfiniteLevel(); err != nil {
+			log.Fatalf("infinite level: %v", err)
+		}
+		fmt.Printf("Set Infinite level (SHIFT-9); per-move budget = %d cycles (%.1fs @1.02MHz).\n",
+			budgetCycles, float64(budgetCycles)/sargon.CyclesPerSecond)
+	} else if level != 1 {
 		if err := m.Level(level); err != nil {
 			log.Fatalf("level: %v", err)
 		}
 		fmt.Printf("Set level %d.\n", level)
 	}
-	if easyMode {
+	if easyMode && budgetCycles == 0 {
 		if err := m.EasyMode(); err != nil {
 			log.Fatalf("easy mode: %v", err)
 		}
 		fmt.Println("Enabled Easy Mode (CTRL-E): ponder-free, reliable RAM board reads.")
 	}
 
-	// Budget scales with level (level n ~ its avg time; give generous margin).
+	// Budget scales with level (higher levels think much longer; give margin).
 	budget := uint64(15_000_000)
+	if level > 2 {
+		budget = uint64(level) * 30_000_000
+	}
 	for i, mv := range moves {
 		mv = strings.TrimSpace(mv)
 		if mv == "" {
 			continue
 		}
 		fmt.Printf("\n== ply %d: player %s ==\n", i+1, mv)
-		res, err := m.SubmitMove(mv, budget)
+		var res sargon.MoveResult
+		var err error
+		if budgetCycles > 0 {
+			res, err = m.RequestMove(mv, budgetCycles)
+		} else {
+			res, err = m.SubmitMove(mv, budget)
+		}
 		if err != nil {
 			fmt.Printf("--- screen on error ---\n%s\n", strings.TrimRight(m.Screen(), "\n"))
 			log.Fatalf("submit %q: %v", mv, err)
 		}
 		ram := res.SargonMove
-		fmt.Printf("Sargon replied: screen %q  |  RAM %s-%s (idx %d)",
-			res.SargonText, ram.From.Algebraic(), ram.To.Algebraic(), ram.MovedIndex)
+		fmt.Printf("Sargon replied: screen %q  |  RAM %s-%s (idx %d)  |  think %d cyc (%.2fs @1.02MHz)",
+			res.SargonText, ram.From.Algebraic(), ram.To.Algebraic(), ram.MovedIndex,
+			res.ThinkCycles, float64(res.ThinkCycles)/sargon.CyclesPerSecond)
 		if ram.CapturedIndex >= 0 {
 			fmt.Printf("  [captured idx %d]", ram.CapturedIndex)
 		}
@@ -128,6 +146,7 @@ func main() {
 	play := flag.String("play", "", "play mode: comma-separated player moves (e.g. E2-E4,D2-D4), driven via the sargon package")
 	level := flag.Int("level", 1, "play mode: Sargon level 1-9 (3 = ~30s/move)")
 	flag.BoolVar(&easyMode, "easy", true, "play mode: enable Easy Mode (CTRL-E) so Sargon stops pondering (required for reliable RAM board reads)")
+	flag.Uint64Var(&budgetCycles, "budget-cycles", 0, "play mode: if >0, use Infinite level + CTRL-T after this many 6502 cycles per move (fair-match mechanism)")
 	flag.Parse()
 
 	m, err := sargon.NewMachine(*dsk)
