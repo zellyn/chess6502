@@ -96,16 +96,33 @@ set (qs = 819,637 = 89% of nodes). Matches are mirror self-play at
 depth 6, ~200-800 games, Elo vs the current-rules baseline. **Bottom
 line: two "obvious" improvements are duds, one QS knob is a keeper.**
 
-**1. Futility mate-zone guard fix (task #27) — DO NOT PORT.**
+**1. Futility mate-zone guard fix (task #27) — DON'T PORT AS-IS; the
+guard and margin are one tuning problem.**
 The asm's futility/RFP guard uses an unsigned compare, so futility is
 silently disabled in every negative-alpha/beta window (the same bug
-class as the old null-move one). Fixing it (signed-aware, futility
-active in those windows) cuts −20.7% nodes — but costs strength:
+class as the old null-move one). Flipping the guard signed-aware
+(futility active in those windows) cuts −20.7% nodes but costs
+strength:
 - 800-game match, fix=true vs current: +229 =295 −276, 47.1%,
-  **−20.4 ± 19.2 Elo**. Four smaller 200-game runs agree (−31, −23,
-  −17, −10). The extra pruning in negative windows is cutting real
-  moves. **The "bug" is protective; leave the asm as-is.** This
-  retires the held asm-side futility signed-compare fix.
+  **−20.4 ± 19.2 Elo** (weak: CI barely clears zero). Four smaller
+  200-game runs agree (−31, −23, −17, −10).
+- **CAVEAT (added on review — the first read of this over-claimed).**
+  What the A/B changed is ONLY the guard; the futility/RFP margins
+  (static 120 at rem 1, 250 at rem 2) were left at values chosen while
+  futility ran only in positive windows. Extrapolating those margins
+  into negative windows over-prunes — that is exactly the −20%-nodes/
+  −20-Elo fingerprint. The experiment therefore CANNOT distinguish
+  "futility in negative windows is bad" from "these static margins are
+  wrong there," because guard and margin were flipped together. So the
+  "bug is protective" reading holds only conditional on leaving the
+  margins untuned — it is not a property of the technique. Also: the
+  mirror models the bug as an idealized "off when negative"; the real
+  asm is an unsigned compare on signed bytes, whose per-window
+  behavior is not necessarily a clean cutoff. NEXT: don't retire this
+  — enable the signed guard and sweep/Texel the futility + RFP margins
+  (depth-scaled) for negative windows; suspect RFP@rem2 static-250
+  first. The −20% node saving is worth ~20% reachable depth at 1 MHz
+  IF it can be had at neutral Elo, which this A/B never tried.
 
 **2. LMR/PVS parameter sweep (task #28) — no porting winner.**
 Swept lateness {2,3,4}×{5,6,8}, R floors, reduce-killers, evasion-PVS.
