@@ -8,6 +8,21 @@ func (e *Engine) SearchFixed(depth int) (Move, int) {
 	e.Pos.Ply = 0
 	e.Best = NoMove
 	e.killer = [MaxPly][2]Move{}
+	if e.Features&FtHistory != 0 {
+		if e.hist == nil {
+			e.hist = &[2][128][128]int32{}
+		} else {
+			// Decay between moves so stale scores fade but useful
+			// ordering carries across the game.
+			for s := range e.hist {
+				for f := range e.hist[s] {
+					for t := range e.hist[s][f] {
+						e.hist[s][f][t] >>= 1
+					}
+				}
+			}
+		}
+	}
 	e.inChk[0] = e.curInCheck()
 	e.alpha[0] = -Inf
 	e.beta[0] = Inf
@@ -169,6 +184,9 @@ func (e *Engine) moveLoop() int {
 	p := &e.Pos
 	ply := p.Ply
 	qs := e.qsKind[ply]
+	if !qs && e.Features&FtOrder != 0 {
+		return e.orderedMoveLoop()
+	}
 	list := e.generate(qs)
 
 	pass := 1

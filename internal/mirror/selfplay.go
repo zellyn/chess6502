@@ -18,6 +18,7 @@ type PlayerCfg struct {
 	FixFutility bool
 	Fut         *FutilityParams
 	KB          *KBTables
+	Ord         OrderParams
 }
 
 func (c *PlayerCfg) engine() *Engine {
@@ -32,6 +33,7 @@ func (c *PlayerCfg) engine() *Engine {
 		e.Fut = *c.Fut
 	}
 	e.KB = c.KB
+	e.Ord = c.Ord
 	return e
 }
 

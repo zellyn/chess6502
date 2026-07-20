@@ -161,14 +161,16 @@ func match(args []string) {
 	bKB := fs.String("bkb", "", "B king-bucket table file")
 	aFut := fs.String("afut", "", "A futility params: guard,rfp1,rfp2,rfp3,rfp4,fut,maxrem (empty = shipped)")
 	bFut := fs.String("bfut", "", "B futility params")
+	aOrd := fs.String("aord", "", "A ordering knobs: losinglast,histmalus (e.g. 1,1)")
+	bOrd := fs.String("bord", "", "B ordering knobs")
 	fs.Parse(args)
 
 	lines, err := mirror.GenOpenings(sprt.Openings, *pairs, *seed)
 	check(err)
 	a := mirror.PlayerCfg{Features: byte(*aMask), Weights: parseWeights(*aw), Depth: *depth,
-		FixFutility: *aFix, LMR: parseLMR(*aLMR), QS: parseQS(*aQS), KB: loadKB(*aKB), Fut: parseFut(*aFut)}
+		FixFutility: *aFix, LMR: parseLMR(*aLMR), QS: parseQS(*aQS), KB: loadKB(*aKB), Fut: parseFut(*aFut), Ord: parseOrd(*aOrd)}
 	b := mirror.PlayerCfg{Features: byte(*bMask), Weights: parseWeights(*bw), Depth: *depth,
-		FixFutility: *bFix, LMR: parseLMR(*bLMR), QS: parseQS(*bQS), KB: loadKB(*bKB), Fut: parseFut(*bFut)}
+		FixFutility: *bFix, LMR: parseLMR(*bLMR), QS: parseQS(*bQS), KB: loadKB(*bKB), Fut: parseFut(*bFut), Ord: parseOrd(*bOrd)}
 	start := time.Now()
 	res, err := mirror.Match(a, b, lines, *pairs, *workers, *seed)
 	check(err)
@@ -301,6 +303,20 @@ func parseFut(s string) *mirror.FutilityParams {
 		MaxRem:       maxRem,
 		Fut:          fut,
 	}
+}
+
+// parseOrd parses "losinglast,histmalus" (e.g. "1,1"); empty = zero.
+func parseOrd(s string) mirror.OrderParams {
+	if s == "" {
+		return mirror.OrderParams{}
+	}
+	var ll, hm int
+	n, err := fmt.Sscanf(s, "%d,%d", &ll, &hm)
+	if err != nil || n != 2 {
+		fmt.Fprintf(os.Stderr, "bad ordering params %q (want losinglast,histmalus)\n", s)
+		os.Exit(2)
+	}
+	return mirror.OrderParams{LosingLast: ll != 0, HistMalus: hm != 0}
 }
 
 // parseQS parses "plycap,recapafter".

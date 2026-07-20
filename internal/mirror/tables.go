@@ -65,7 +65,18 @@ const (
 	FtPstruct = 0x08
 	FtLMR     = 0x10 // PVS zero-window scouts + late move reductions
 
+	// Experimental move-ordering enablers (task #35). NOT in FtAll: the
+	// asm baseline keeps its five-pass MVV-bucket + killer ordering, so
+	// these are the A/B toggles. When either is set, the full-width move
+	// loop switches to the unified scored/sorted ordering in ordering.go.
+	FtSEE     = 0x20 // static-exchange-evaluation capture ordering
+	FtHistory = 0x40 // butterfly (from/to) history for quiet ordering
+
 	FtAll = FtNull | FtKiller | FtFutil | FtPstruct | FtLMR
+
+	// FtOrder is the mask of features that route through the scored
+	// ordered move loop.
+	FtOrder = FtSEE | FtHistory
 )
 
 // TT bound codes.

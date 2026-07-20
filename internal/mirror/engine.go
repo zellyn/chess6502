@@ -26,6 +26,13 @@ type Engine struct {
 	QS      QSParams
 	QSNodes uint64 // nodes entered at ply >= MaxDepth (evasion included)
 
+	// Ord configures the scored move ordering used when FtSEE/FtHistory
+	// are enabled (task #35).
+	Ord OrderParams
+	// hist is the butterfly history table [side][from][to], keyed by the
+	// 0x88 squares. Bumped on quiet fail-high, decayed at SearchFixed.
+	hist *[2][128][128]int32
+
 	// KB, when non-nil, adds king-bucketed PSQT deltas to the eval
 	// (task #30: piece values depend on the king's file zone). nil =
 	// the asm's current single-PSQT eval.
