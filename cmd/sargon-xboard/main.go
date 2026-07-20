@@ -266,20 +266,23 @@ func (e *engine) resign() {
 // unreliable while Sargon ponders). Falls back to the RAM from/to squares.
 func (e *engine) replyCoord(res sargon.MoveResult) string {
 	sw := e.m != nil && e.m.SargonWhite
-	// Prefer the RAM-decoded from/to squares — reliable in Easy Mode and immune
-	// to move-list text quirks (truncated promotions, check '+' suffixes). The
-	// screen token is a fallback if the RAM decode is degenerate.
+	// The on-screen move-list token is authoritative — it is exactly the move
+	// Sargon displays (with promotion "/Q" and capture "X"), read at commit
+	// time. The 8-char scrape window captures promotions in full. Use it first;
+	// fall back to the RAM from/to decode only if the token can't be parsed.
+	if c := screenTokenToCoord(res.SargonText, sw); c != "" {
+		return c
+	}
 	mv := res.SargonMove
 	if mv.From.Valid() && mv.To.Valid() && mv.From != mv.To {
 		coord := mv.From.Algebraic() + mv.To.Algebraic()
-		// Promotion: a pawn slot reaching the back rank (Sargon always queens).
 		if mv.MovedIndex >= 0 && sargon.PieceIndexType(mv.MovedIndex%16) == sargon.Pawn &&
 			(mv.To.Rank() == 0 || mv.To.Rank() == 7) {
 			coord += "q"
 		}
 		return coord
 	}
-	return screenTokenToCoord(res.SargonText, sw)
+	return ""
 }
 
 // screenTokenToCoord parses a Sargon move-list token ("E2-E4", "E5XD4",
