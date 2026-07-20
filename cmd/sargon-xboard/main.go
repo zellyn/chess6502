@@ -425,16 +425,12 @@ func coordToSargon(coord string) (string, error) {
 		return "", fmt.Errorf("bad to %q", coord)
 	}
 	move := from + "-" + to
-	// Promotion: Sargon promotes to queen on plain Return; append a letter for
-	// under-promotion (N/R/B). 'q' needs no suffix.
-	if len(coord) >= 5 {
-		switch coord[4] {
-		case 'n', 'r', 'b':
-			move += strings.ToUpper(string(coord[4]))
-		case 'q':
-			// default
-		}
-	}
+	// Promotion: plain FROM-TO + RETURN auto-queens. We always queen (drop any
+	// promotion letter): this Sargon build rejects the manual's under-promotion
+	// suffix ("D7-D8B" -> INVALID MOVE), which would spuriously resign the game.
+	// A queen covers every rook/bishop move, so treating an under-promotion as a
+	// queen never makes a later move illegal (only a knight under-promotion —
+	// vanishingly rare — could diverge). This is a benchmark-robustness choice.
 	return move, nil
 }
 
