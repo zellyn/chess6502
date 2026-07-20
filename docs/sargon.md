@@ -211,6 +211,37 @@ cutechess-cli \
   -each tc=inf -games 1 -pgnout smoke.pgn
 ```
 
+## Sargon as White (CTRL-S) and matched gauntlet
+
+`StartAsWhite(budgetCycles)` sends CTRL-S so Sargon takes White and plays the
+opening move (the keyboard opponent becomes Black); the driver flips which
+piece-list half and move-list column belong to Sargon (`Machine.SargonWhite`).
+Note the move-list header swaps ("SARGON PLAYER") but the columns don't: White's
+move is always the LEFT column (cols 10-15), Black's the RIGHT (22-27). The
+xboard adapter detects White automatically (a `go` with no prior `usermove`).
+
+For matches the adapter runs **Infinite level + Easy Mode + CTRL-T**: Easy Mode
+stops Sargon pondering after it moves, so the piece list stays stable (reliable
+reads) and play is reproducible and ponder-free (matching our non-pondering
+engine). The adapter emits Sargon's move parsed from the authoritative on-screen
+token (RAM decode is a fallback) and **never claims a game result** — cutechess
+adjudicates mate/stalemate/draws from the moves; a wrong claim (our game-over
+scrape can false-positive on "CHECK") would lose the game as an "invalid result
+claim".
+
+### KNOWN LIMITATION: no setboard / opening pool yet
+
+Games run from the **standard start position** (opening variety comes from our
+engine's `-dither`). Setting an arbitrary FEN (e.g. `tools/openings-pool.epd`)
+does NOT work: Sargon reconstructs its board from the on-screen move list
+(replaying from a fixed template), so the `$60-$7F` piece list is a derived copy
+— poking it is reverted on the next move (a fresh game replays zero moves ->
+standard start). A search of RAM found no rank-structured master board under any
+stride, so proper setboard needs deeper reverse-engineering of Sargon's move-gen
+board / move-list state. `SetupPosition` parses the FEN and assigns slots
+correctly (unit-tested) but is a no-op on Sargon's actual position; left in with
+a clear caveat. This is the top follow-up for reduced-variance rating pools.
+
 ## Status / next steps
 
 Done: headless boot; text-screen scraping; paced keyboard move injection; reply

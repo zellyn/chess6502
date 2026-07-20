@@ -62,6 +62,8 @@ type engine struct {
 	force        bool
 	pendingReply string
 	haveReply    bool
+	movesSeen    int  // opponent usermoves since "new"
+	startedWhite bool // Sargon-as-White opening move dispatched
 }
 
 func (e *engine) run() {
@@ -120,6 +122,7 @@ func (e *engine) handle(line string) bool {
 		}
 		e.smu.Lock()
 		e.force, e.pendingReply, e.haveReply = false, "", false
+		e.movesSeen, e.startedWhite = 0, false
 		e.smu.Unlock()
 	case "force":
 		e.smu.Lock()
@@ -128,21 +131,29 @@ func (e *engine) handle(line string) bool {
 	case "ping":
 		e.send("pong %s", arg)
 	case "usermove":
+		e.smu.Lock()
+		e.movesSeen++
+		e.smu.Unlock()
 		e.doUserMove(arg)
 	case "go":
-		// Leave force mode and make Sargon move for the current side (Black).
-		// If its reply to the last usermove is already computed, emit it now;
-		// otherwise the in-flight think goroutine will emit it when done (it
-		// sees force cleared). A "go" with no prior usermove (engine as White)
-		// is unsupported.
+		// "go" with no prior usermove means the engine is White: make Sargon
+		// take White (CTRL-S) and play the opening move. Otherwise leave force
+		// mode and emit Sargon's reply to the last usermove (now, if ready, or
+		// the in-flight think goroutine emits it when it sees force cleared).
 		e.smu.Lock()
 		e.force = false
+		firstWhite := e.movesSeen == 0 && !e.startedWhite
+		if firstWhite {
+			e.startedWhite = true
+		}
 		r := ""
-		if e.haveReply {
+		if !firstWhite && e.haveReply {
 			r, e.pendingReply, e.haveReply = e.pendingReply, "", false
 		}
 		e.smu.Unlock()
-		if r != "" {
+		if firstWhite {
+			go e.thinkFirstWhite()
+		} else if r != "" {
 			e.send("move %s", r)
 		}
 	case "result", "?", "draw", "computer", "hard", "easy", "post", "nopost",
@@ -168,7 +179,12 @@ func (e *engine) startBoot() {
 			err = m.BootToPrompt()
 		}
 		if err == nil && e.budgetCycles > 0 {
-			err = m.InfiniteLevel() // fair mode: CTRL-T at our cycle budget
+			// Fair mode: Infinite level + CTRL-T at our cycle budget. Also
+			// enable Easy Mode so Sargon doesn't ponder after moving — keeps
+			// the piece list stable (reliable reads) and play reproducible.
+			if err = m.InfiniteLevel(); err == nil {
+				err = m.EasyMode()
+			}
 		} else {
 			if err == nil && e.level != 1 {
 				err = m.Level(e.level)
@@ -199,6 +215,71 @@ func (e *engine) doUserMove(coord string) {
 	go e.think(coord)
 }
 
+// thinkFirstWhite handles the engine-plays-White case: Sargon takes White via
+// CTRL-S and plays the opening move, which is emitted as our move.
+func (e *engine) thinkFirstWhite() {
+	if err := e.ensureBooted(); err != nil {
+		e.send("tellusererror boot failed: %v", err)
+		return
+	}
+	res, err := e.m.StartAsWhite(e.budgetCycles)
+	if err != nil {
+		e.send("tellusererror sargon-as-white: %v", err)
+		log.Printf("sargon-as-white: %v", err)
+		return
+	}
+	e.send("move %s", e.replyCoord(res))
+}
+
+// replyCoord converts Sargon's reply to xboard coordinate notation, preferring
+// the authoritative on-screen move token (the RAM piece-list decode can be
+// unreliable while Sargon ponders). Falls back to the RAM from/to squares.
+func (e *engine) replyCoord(res sargon.MoveResult) string {
+	sw := e.m != nil && e.m.SargonWhite
+	if c := screenTokenToCoord(res.SargonText, sw); c != "" {
+		return c
+	}
+	mv := res.SargonMove
+	return mv.From.Algebraic() + mv.To.Algebraic() + promoSuffix(res.SargonText)
+}
+
+// screenTokenToCoord parses a Sargon move-list token ("E2-E4", "E5XD4",
+// "H7-H8/Q", "0-0", "0-0-0") into xboard coordinate notation ("e2e4", "e5d4",
+// "h7h8q", "e1g1", ...). Returns "" if it can't parse.
+func screenTokenToCoord(tok string, sargonWhite bool) string {
+	t := strings.ToUpper(strings.TrimSpace(tok))
+	switch t {
+	case "0-0", "O-O": // kingside castle
+		if sargonWhite {
+			return "e1g1"
+		}
+		return "e8g8"
+	case "0-0-0", "O-O-O": // queenside castle
+		if sargonWhite {
+			return "e1c1"
+		}
+		return "e8c8"
+	}
+	promo := ""
+	if i := strings.IndexByte(t, '/'); i >= 0 {
+		if i+1 < len(t) {
+			promo = strings.ToLower(string(t[i+1]))
+		}
+		t = t[:i]
+	}
+	// Expect FROM sep TO, sep is '-' or 'X'; ignore a trailing "EP".
+	t = strings.TrimSuffix(t, "EP")
+	if len(t) < 5 || (t[2] != '-' && t[2] != 'X') {
+		return ""
+	}
+	from, ok1 := sargon.ParseSquare(t[0:2])
+	to, ok2 := sargon.ParseSquare(t[3:5])
+	if !ok1 || !ok2 {
+		return ""
+	}
+	return from.Algebraic() + to.Algebraic() + promo
+}
+
 func (e *engine) think(coord string) {
 	if err := e.ensureBooted(); err != nil {
 		e.send("tellusererror boot failed: %v", err)
@@ -217,18 +298,15 @@ func (e *engine) think(coord string) {
 		res, err = e.m.SubmitMove(sargonText, e.wait)
 	}
 	if err != nil {
-		// Could be our move mating Sargon (GameOver handled below), else error.
+		// If our move ended the game (mate/stalemate), cutechess already
+		// adjudicated from the move; nothing to send. Otherwise log the error.
 		if res.GameOver {
-			e.reportResult(res, true)
 			return
 		}
 		e.send("tellusererror submit %q: %v", coord, err)
 		return
 	}
-	// Prefer the RAM-decoded from/to (coordinate notation); castling/ep/promo
-	// all come through as squares.
-	mv := res.SargonMove
-	reply := mv.From.Algebraic() + mv.To.Algebraic() + promoSuffix(res.SargonText)
+	reply := e.replyCoord(res)
 
 	// Emit now unless we're in force mode, in which case hold the reply until
 	// "go" arrives (which will emit it, or clear force so we emit here).
@@ -240,27 +318,11 @@ func (e *engine) think(coord string) {
 	}
 	e.smu.Unlock()
 
+	// Emit only the move. Never claim a result: cutechess adjudicates
+	// mate/stalemate/draws itself from the moves, and a wrong claim (our
+	// game-over scrape can false-positive on "CHECK") loses the game as an
+	// "invalid result claim".
 	e.send("move %s", reply)
-	if res.GameOver {
-		e.reportResult(res, false)
-	}
-}
-
-// reportResult prints an xboard game-result line. ourMoveMated=true means the
-// opponent's (user's) move ended the game; otherwise Sargon's move did.
-func (e *engine) reportResult(res sargon.MoveResult, ourMoveMated bool) {
-	switch {
-	case strings.Contains(res.Message, "STALEMATE"), strings.Contains(res.Message, "DRAW"):
-		e.send("1/2-1/2 {%s}", res.Message)
-	case strings.Contains(res.Message, "MATE"):
-		if ourMoveMated {
-			e.send("1-0 {White mates}") // user (White) mated Sargon
-		} else {
-			e.send("0-1 {Black mates}") // Sargon (Black) mated the user
-		}
-	default:
-		e.send("1/2-1/2 {game over: %s}", res.Message)
-	}
 }
 
 // coordToSargon converts xboard coordinate notation ("e2e4", "e7e8q",

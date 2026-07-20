@@ -32,6 +32,10 @@ func (nullPlotter) OncePerFrame()           {}
 type Machine struct {
 	A2    *goapple2.Apple2
 	Steps uint64 // total CPU steps executed via Run/RunUntil
+	// SargonWhite is true when Sargon plays White (after StartAsWhite / CTRL-S);
+	// the keyboard opponent is then Black. It flips which piece-list half and
+	// which move-list column belong to Sargon vs the opponent.
+	SargonWhite bool
 }
 
 func romDir() string {
@@ -119,6 +123,12 @@ func (m *Machine) Cycles() uint64 {
 // Peek reads a byte of Apple II main RAM ($0000-$BFFF).
 func (m *Machine) Peek(addr uint16) byte {
 	return m.A2.RamRead(addr)
+}
+
+// Poke writes a byte of Apple II main RAM ($0000-$BFFF). Used to set up a
+// position by overwriting the zero-page piece list.
+func (m *Machine) Poke(addr uint16, val byte) {
+	m.A2.Write(addr, val)
 }
 
 // PeekSlice returns a copy of main RAM in [start, start+n).

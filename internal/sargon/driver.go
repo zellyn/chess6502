@@ -202,9 +202,11 @@ func (m *Machine) enterMove(move string) (mid PieceList, prevReply string, err e
 	}
 
 	before := m.ReadPieceList()
-	fromIdx := whiteIndexAt(before, from)
+	// The keyboard opponent plays Black iff Sargon is White.
+	oppBlack := m.SargonWhite
+	fromIdx := pieceIndexAt(before, from, oppBlack)
 	if fromIdx < 0 {
-		return mid, "", fmt.Errorf("no white piece on %s for move %q", from.Algebraic(), move)
+		return mid, "", fmt.Errorf("no %s piece on %s for move %q", colorName(oppBlack), from.Algebraic(), move)
 	}
 
 	const stepsPerKey = 200_000
@@ -226,7 +228,8 @@ func (m *Machine) enterMove(move string) (mid PieceList, prevReply string, err e
 				return mid, "", err
 			}
 			s += pollChunk
-			if Square(m.A2.RamRead(uint16(WhiteListAddr+fromIdx))) == to {
+			// Piece-list byte for global index fromIdx lives at $60+fromIdx.
+			if Square(m.A2.RamRead(uint16(PieceListAddr+fromIdx))) == to {
 				accepted = true
 				break
 			}
@@ -263,7 +266,8 @@ func (m *Machine) decodeReply(res MoveResult, mid PieceList) MoveResult {
 	m.Run(2_000_000)
 	res.SargonText = m.scrapeReplyText()
 	after := m.ReadPieceList()
-	if mv, ok := DiffMove(mid, after, true /* black */); ok {
+	// Diff Sargon's own half: black (16-31) when Sargon is Black, else white.
+	if mv, ok := DiffMove(mid, after, !m.SargonWhite); ok {
 		res.SargonMove = mv
 	}
 	res.Board = after
@@ -271,11 +275,75 @@ func (m *Machine) decodeReply(res MoveResult, mid PieceList) MoveResult {
 	return res
 }
 
+// pieceIndexAt returns the global piece-list index (0-15 white, 16-31 black)
+// occupying square sq within the requested color half, or -1.
+func pieceIndexAt(pl PieceList, sq Square, black bool) int {
+	lo, hi := 0, 16
+	if black {
+		lo, hi = 16, 32
+	}
+	for i := lo; i < hi; i++ {
+		if pl[i] == sq {
+			return i
+		}
+	}
+	return -1
+}
+
+func colorName(black bool) string {
+	if black {
+		return "black"
+	}
+	return "white"
+}
+
 // InfiniteLevel puts Sargon on the Infinite analysis level (SHIFT-9). Combined
 // with RequestMove (CTRL-T after a chosen cycle budget) it gives fully
 // controlled, reproducible per-move compute. Call on the player's turn.
 func (m *Machine) InfiniteLevel() error {
 	return m.Level(9)
+}
+
+// StartAsWhite makes Sargon take White (CTRL-S) and play the opening move,
+// giving it budgetCycles of thinking then forcing with CTRL-T (as RequestMove).
+// Call once right after boot and InfiniteLevel, before any opponent move; the
+// keyboard opponent is then Black. Returns Sargon's first move. An opening-book
+// first move (the common case) is returned instantly without CTRL-T.
+func (m *Machine) StartAsWhite(budgetCycles uint64) (MoveResult, error) {
+	var res MoveResult
+	mid := m.ReadPieceList() // initial position
+	m.SargonWhite = true
+	prevReply := m.scrapeReplyText() // Sargon's (White, left) column; empty at start
+	m.Key(0x13)                      // CTRL-S: Sargon plays the side to move (White)
+	thinkStart := m.Cycles()
+
+	if budgetCycles == 0 {
+		// Level mode: wait for Sargon's natural (timed-level) opening move.
+		if !m.waitReply(prevReply, 80_000_000) {
+			return res, fmt.Errorf("no opening move from sargon-as-white (level mode)")
+		}
+	} else {
+		book := false
+		for m.Cycles()-thinkStart < budgetCycles {
+			if err := m.Run(pollChunk); err != nil {
+				return res, err
+			}
+			if tok := m.scrapeReplyText(); tok != "" && tok != prevReply {
+				book = true
+				break
+			}
+		}
+		if !book {
+			m.ForceMove() // CTRL-T
+			if !m.waitReply(prevReply, 12_000_000) {
+				res.ThinkCycles = m.Cycles() - thinkStart
+				res.Message, res.GameOver = m.scrapeMessage()
+				return res, fmt.Errorf("no opening move from sargon-as-white")
+			}
+		}
+	}
+	res.ThinkCycles = m.Cycles() - thinkStart
+	return m.decodeReply(res, mid), nil
 }
 
 // parseFromTo extracts the from/to squares from a move like "E2-E4", "E4XD5",
@@ -290,17 +358,6 @@ func parseFromTo(move string) (from, to Square, ok bool) {
 	}
 	to, ok2 := ParseSquare(move[3:5])
 	return from, to, ok1 && ok2
-}
-
-// whiteIndexAt returns the white piece-list index (0-15) occupying square sq,
-// or -1.
-func whiteIndexAt(pl PieceList, sq Square) int {
-	for i := 0; i < 16; i++ {
-		if pl[i] == sq {
-			return i
-		}
-	}
-	return -1
 }
 
 // messageLine returns the trimmed contents of the message-line row (row 5).
@@ -319,16 +376,32 @@ func blackChanged(a, b PieceList) bool {
 }
 
 // scrapeReplyText returns Sargon's most-recent move token from the on-screen
-// move list (the last non-empty entry in the SARGON column). Best-effort.
+// move list. The list is chronological with White's move in the LEFT column
+// (cols 10-15) and Black's in the RIGHT column (cols 22-27), regardless of who
+// Sargon is; the header label swaps but the columns do not. So Sargon's column
+// is the left one when it plays White, else the right one.
+//
+// It returns the LAST (bottom-most) non-empty token in that column, which is
+// always the newest move even after the list scrolls (Sargon shows ~13 moves,
+// newest at the bottom). Verified across a full 78-ply game.
 func (m *Machine) scrapeReplyText() string {
+	return m.scrapeMoveColumn(!m.SargonWhite /* right column iff Sargon is Black */)
+}
+
+// scrapeMoveColumn returns the bottom-most non-empty move token in the left
+// (rightCol=false, cols 10-15) or right (rightCol=true, cols 22-27) column.
+func (m *Machine) scrapeMoveColumn(rightCol bool) string {
+	lo, hi := 10, 16
+	if rightCol {
+		lo, hi = 22, 28
+	}
 	last := ""
 	for r := 10; r < 24; r++ {
 		row := m.TextRow(r)
-		if len(row) < 28 {
+		if len(row) < hi {
 			continue
 		}
-		tok := strings.TrimSpace(row[22:28])
-		if tok != "" {
+		if tok := strings.TrimSpace(row[lo:hi]); tok != "" {
 			last = tok
 		}
 	}

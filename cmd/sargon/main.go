@@ -69,6 +69,9 @@ func runScript(m *sargon.Machine, script string) {
 // on-screen move text) plus the RAM-derived board.
 var easyMode bool
 var budgetCycles uint64
+var sargonWhite bool
+var fenSetup string
+var saveRAM string
 
 func playGame(m *sargon.Machine, level int, moves []string) {
 	fmt.Println("Booting to move-entry prompt...")
@@ -76,6 +79,19 @@ func playGame(m *sargon.Machine, level int, moves []string) {
 		log.Fatalf("boot: %v", err)
 	}
 	fmt.Printf("Ready after %d steps. Initial board from RAM:\n%s", m.Steps, m.ReadPieceList().Board())
+
+	if fenSetup != "" {
+		if err := m.SetupPosition(fenSetup); err != nil {
+			log.Fatalf("setup position: %v", err)
+		}
+		fmt.Printf("Set up FEN %q. Board from RAM:\n%s", fenSetup, m.ReadPieceList().Board())
+		if saveRAM != "" {
+			if err := os.WriteFile(saveRAM, m.PeekSlice(0x0000, 0xC000), 0644); err != nil {
+				log.Fatalf("save-ram: %v", err)
+			}
+			fmt.Printf("saved RAM to %s\n", saveRAM)
+		}
+	}
 
 	if budgetCycles > 0 {
 		// Fair-match mechanism: Infinite level + CTRL-T after our cycle budget.
@@ -95,6 +111,15 @@ func playGame(m *sargon.Machine, level int, moves []string) {
 			log.Fatalf("easy mode: %v", err)
 		}
 		fmt.Println("Enabled Easy Mode (CTRL-E): ponder-free, reliable RAM board reads.")
+	}
+	if sargonWhite {
+		res, err := m.StartAsWhite(budgetCycles)
+		if err != nil {
+			log.Fatalf("start-as-white: %v", err)
+		}
+		fmt.Printf("Sargon (White) opens: screen %q  |  RAM %s-%s  |  think %d cyc\nThe -play moves are now BLACK's replies.\n",
+			res.SargonText, res.SargonMove.From.Algebraic(), res.SargonMove.To.Algebraic(), res.ThinkCycles)
+		fmt.Print(res.Board.Board())
 	}
 
 	// Budget scales with level (higher levels think much longer; give margin).
@@ -147,6 +172,9 @@ func main() {
 	level := flag.Int("level", 1, "play mode: Sargon level 1-9 (3 = ~30s/move)")
 	flag.BoolVar(&easyMode, "easy", true, "play mode: enable Easy Mode (CTRL-E) so Sargon stops pondering (required for reliable RAM board reads)")
 	flag.Uint64Var(&budgetCycles, "budget-cycles", 0, "play mode: if >0, use Infinite level + CTRL-T after this many 6502 cycles per move (fair-match mechanism)")
+	flag.BoolVar(&sargonWhite, "sargon-white", false, "play mode: Sargon plays White (CTRL-S); -play moves become Black's replies")
+	flag.StringVar(&fenSetup, "fen", "", "play mode: set up this FEN/EPD position (poke board) after boot")
+	flag.StringVar(&saveRAM, "save-ram", "", "debug: save RAM after fen setup")
 	flag.Parse()
 
 	m, err := sargon.NewMachine(*dsk)
@@ -154,7 +182,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if *play != "" {
+	if *play != "" || fenSetup != "" || sargonWhite || budgetCycles > 0 {
 		playGame(m, *level, strings.Split(*play, ","))
 		return
 	}
