@@ -184,7 +184,9 @@ func TestFutilityMarginNodes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow")
 	}
-	shipped := DefaultFutility // buggy guard, RFP 120/250, Fut 120
+	// Explicit buggy shipped baseline (independent of DefaultFutility,
+	// which task #34 flips to the corrected scheme).
+	shipped := FutilityParams{CorrectGuard: false, RFP: [8]int{0, 120, 250}, MaxRem: 2, Fut: 120}
 	cg := func(rfp [8]int, fut, maxRem int) FutilityParams {
 		return FutilityParams{CorrectGuard: true, RFP: rfp, MaxRem: maxRem, Fut: fut}
 	}
@@ -199,8 +201,11 @@ func TestFutilityMarginNodes(t *testing.T) {
 		{"correct 300/500", cg([8]int{0, 300, 500}, 120, 2)},
 		{"correct 150/300", cg([8]int{0, 150, 300}, 120, 2)},
 		{"correct 175/350", cg([8]int{0, 175, 350}, 120, 2)},
+		{"correct 120/400", cg([8]int{0, 120, 400}, 120, 2)},
+		{"correct 120/450", cg([8]int{0, 120, 450}, 120, 2)},
 		{"correct 120/500", cg([8]int{0, 120, 500}, 120, 2)},
 		{"correct 120/700", cg([8]int{0, 120, 700}, 120, 2)},
+		{"correct depth3 120/500/700", cg([8]int{0, 120, 500, 700}, 120, 3)},
 		{"correct rfp2-only 500", cg([8]int{0, 0, 500}, 120, 2)},
 		{"correct depth3 120/250/400", cg([8]int{0, 120, 250, 400}, 120, 3)},
 		{"correct depth3 200/350/500", cg([8]int{0, 200, 350, 500}, 120, 3)},
@@ -228,12 +233,15 @@ func TestFutilityMarginNodes(t *testing.T) {
 	}
 }
 
-// TestFutilityGuardNodes: fixed-depth node counts, current vs fixed
-// mate-zone guard, all features on.
+// TestFutilityGuardNodes: fixed-depth node counts, the buggy shipped
+// scheme vs the adopted corrected scheme (task #34: correct guard,
+// RFP 120/500). Documents the port's node delta.
 func TestFutilityGuardNodes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow")
 	}
+	buggy := FutilityParams{CorrectGuard: false, RFP: [8]int{0, 120, 250}, MaxRem: 2, Fut: 120}
+	adopted := FutilityParams{CorrectGuard: true, RFP: [8]int{0, 120, 500}, MaxRem: 2, Fut: 120}
 	var curTotal, fixTotal uint64
 	for i, fen := range benchFENs(t) {
 		pos, err := ParseFEN(fen)
@@ -241,18 +249,18 @@ func TestFutilityGuardNodes(t *testing.T) {
 			t.Fatal(err)
 		}
 		var n [2]uint64
-		for j, fix := range []bool{false, true} {
+		for j, fp := range []FutilityParams{buggy, adopted} {
 			eng := NewEngine()
-			eng.FixFutilityGuard = fix
+			eng.Fut = fp
 			eng.SetPosition(pos)
 			eng.SearchFixed(6)
 			n[j] = eng.Nodes
 		}
 		curTotal += n[0]
 		fixTotal += n[1]
-		t.Logf("fen %d: current %8d  fixed %8d  (%+.1f%%)  %s",
+		t.Logf("fen %d: buggy %8d  adopted %8d  (%+.1f%%)  %s",
 			i, n[0], n[1], 100*(float64(n[1])/float64(n[0])-1), fen)
 	}
-	t.Logf("TOTAL: current %d  fixed %d  (%+.1f%%)",
+	t.Logf("TOTAL: buggy %d  adopted %d  (%+.1f%%)",
 		curTotal, fixTotal, 100*(float64(fixTotal)/float64(curTotal)-1))
 }

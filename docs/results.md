@@ -36,6 +36,52 @@ two-edit port. Caveat: confirmation ran at 8000 ms, not the 30000 ms pool
 control — a full-budget pool gauntlet would tighten the estimate but is
 not needed to clear the do-no-harm bar.
 
+## 2026-07-19 — futility re-margining (task #34) — CORRECT GUARD, ADOPT RFP 120/500
+
+Resolves the task #27 caveat. That A/B flipped only the guard while
+holding the RFP/futility margins (120 @ rem 1, 250 @ rem 2) tuned for
+positive windows, so it measured over-pruning, not the technique. With
+the corrected signed-aware guard now the fixed baseline (we do NOT keep
+the unsigned-compare bug), the margins are the real decision — and the
+node data pinpointed the culprit before a single match: disabling RFP at
+remaining 1 (RFP1→0) erases nearly all the correct-guard node saving
+(+0.2% vs shipped), so the saving is almost entirely RFP@rem1. RFP@rem2
+saves few nodes but each cut removes a 2-ply subtree — the Elo suspect,
+exactly as flagged.
+
+Depth-6 self-play, correct guard, A = candidate vs B = shipped (buggy
+guard + 120/250), 400 games/seed unless noted. Node deltas on the mirror
+bench (vs shipped 922,898):
+
+| scheme (RFP1/RFP2) | nodes    | Elo (400g, seed 6502) |
+|--------------------|----------|-----------------------|
+| 120/250            | −20.5%   | **−43 ± 27**          |
+| 150/300            | −17.8%   | −37 ± 27              |
+| 200/350            | −14.9%   | −4 ± 27               |
+| 120/700            | −16.5%   | −17 ± 27 (noise)      |
+| **120/500**        | **−16.9%** | **+2 ± 28**         |
+
+The Elo lever is RFP2, not RFP1: RFP2 250→−43, 300→−37, then 350/500/700
+all statistically neutral (CIs cross 0). RFP1 120 vs 150 barely moves it.
+Node savings plateau at ~−17% (RFP1 dominates), so pushing RFP2 below 500
+buys almost nothing (120/400 = −17.3%, only 0.4% more) at more Elo risk,
+and a depth-3 RFP extension (120/500/700) reaches only −17.1%.
+
+**Winner confirmed across 4 seeds (1600 games), 120/500 vs shipped:**
++2±28 (6502), +24±27 (777), −8±27 (12345), −2±27 (31337) →
+**pooled +4 ± 14 Elo** (524-571-505, 50.6%). Neutral-to-positive, CI
+comfortably excludes any meaningful loss.
+
+**ADOPTED as DefaultFutility and the asm port spec:** signed-aware guard
+(RFP/futility active in every non-mate window), RFP margin 120 @ rem 1,
+**500 @ rem 2**, leaf-futility margin 120, block at remaining ≤ 2. Net
+vs the shipped bug: **−16.9% nodes at +4 ± 14 Elo** — ≈17% more
+reachable nodes (free depth at 1 MHz) at no strength cost. WAC holds
+6/7, mate search green. Re-margining RFP2 250→500 recovered ~47 Elo off
+the −43 over-pruner. Asm port: fix the guard to a signed compare AND
+change the rem-2 RFP margin constant 250→500 (both, together — the guard
+fix alone re-enshrines the over-pruning).
+
 ## 2026-07-19 — king-bucketed PSQT (task #30) — DOES NOT CARRY ITS WEIGHT
 
 NNUE/HalfKP-inspired but network-free: non-king pieces get a per-square
@@ -156,6 +202,9 @@ strength:
   (depth-scaled) for negative windows; suspect RFP@rem2 static-250
   first. The −20% node saving is worth ~20% reachable depth at 1 MHz
   IF it can be had at neutral Elo, which this A/B never tried.
+  **RESOLVED by task #34 (newest entry): the suspicion was exactly
+  right — RFP@rem2 was the coster; re-margined to 500 the correct guard
+  is neutral-to-positive at −16.9% nodes.**
 
 **2. LMR/PVS parameter sweep (task #28) — no porting winner.**
 Swept lateness {2,3,4}×{5,6,8}, R floors, reduce-killers, evasion-PVS.

@@ -105,11 +105,17 @@ type FutilityParams struct {
 	Fut int
 }
 
-// DefaultFutility reproduces the asm's current shipped behavior: the
-// unsigned-compare guard and the two static margins.
+// DefaultFutility is the adopted scheme (task #34): the corrected
+// signed-aware guard with RFP re-margined to 120 @ remaining 1, 500 @
+// remaining 2 (the leaf-futility margin stays 120). The old shipped
+// behavior was the unsigned-compare guard with RFP 120/250; enabling
+// the correct guard at 250 over-prunes remaining-2 nodes in negative
+// windows for −43 Elo, but at 500 it is neutral-to-positive
+// (+4 ± 14 over 1600 depth-6 games) while keeping −16.9% nodes. This is
+// the asm port target; we do not re-enshrine the unsigned-compare bug.
 var DefaultFutility = FutilityParams{
-	CorrectGuard: false,
-	RFP:          [8]int{0, 120, 250},
+	CorrectGuard: true,
+	RFP:          [8]int{0, 120, 500},
 	MaxRem:       2,
 	Fut:          120,
 }
