@@ -31,12 +31,19 @@ func main() {
 	level := flag.Int("level", 1, "Sargon level 1-9 (used only when -budget-cycles=0)")
 	easy := flag.Bool("easy", true, "enable Easy Mode (ponder-free; reliable) in level mode")
 	budgetCycles := flag.Uint64("budget-cycles", 0, "fair mode: Infinite level + CTRL-T after this many 6502 cycles/move (0 = use -level)")
+	budgetMult := flag.Float64("budget-multiplier", 1.0, "scale -budget-cycles (approximate Sargon's pondering edge, disabled by Easy Mode; e.g. 2.0 gives Sargon 2x our per-move compute)")
 	wait := flag.Uint64("wait", 40_000_000, "level mode: max CPU steps to wait for a Sargon reply")
 	debug := flag.Bool("debug", false, "log protocol traffic to stderr")
 	flag.Parse()
 
+	effBudget := *budgetCycles
+	if effBudget > 0 && *budgetMult != 1.0 {
+		effBudget = uint64(float64(effBudget) * *budgetMult)
+		log.Printf("Sargon budget %d x %.2f = %d cycles/move", *budgetCycles, *budgetMult, effBudget)
+	}
+
 	e := &engine{
-		dsk: *dsk, level: *level, easy: *easy, budgetCycles: *budgetCycles,
+		dsk: *dsk, level: *level, easy: *easy, budgetCycles: effBudget,
 		wait: *wait, debug: *debug,
 	}
 	e.run()
@@ -64,6 +71,12 @@ type engine struct {
 	haveReply    bool
 	movesSeen    int  // opponent usermoves since "new"
 	startedWhite bool // Sargon-as-White opening move dispatched
+
+	// setboard opening: the FEN cutechess sends to start a varied-opening game.
+	// Applied once, after boot, before the first move (guarded by smu).
+	pendingFEN string
+	setupOnce  *sync.Once
+	setupErr   error
 }
 
 func (e *engine) run() {
@@ -113,7 +126,7 @@ func (e *engine) handle(line string) bool {
 	case "xboard":
 		// no-op
 	case "protover":
-		e.send(`feature myname="SargonIII" usermove=1 setboard=0 ping=1 sigint=0 sigterm=0 colors=0 done=1`)
+		e.send(`feature myname="SargonIII" usermove=1 setboard=1 ping=1 sigint=0 sigterm=0 colors=0 done=1`)
 	case "new":
 		// Boot already started at process launch; only reboot if a game was
 		// already played on this machine.
@@ -123,6 +136,14 @@ func (e *engine) handle(line string) bool {
 		e.smu.Lock()
 		e.force, e.pendingReply, e.haveReply = false, "", false
 		e.movesSeen, e.startedWhite = 0, false
+		e.pendingFEN, e.setupOnce, e.setupErr = "", &sync.Once{}, nil
+		e.smu.Unlock()
+	case "setboard":
+		// Varied-opening start position. Stored now; applied by ensureReady
+		// (after boot, before the first move) via SetupPosition. cutechess sends
+		// this for each game when run with -openings ... format=epd.
+		e.smu.Lock()
+		e.pendingFEN = arg
 		e.smu.Unlock()
 	case "force":
 		e.smu.Lock()
@@ -158,7 +179,7 @@ func (e *engine) handle(line string) bool {
 		}
 	case "result", "?", "draw", "computer", "hard", "easy", "post", "nopost",
 		"random", "level", "st", "sd", "time", "otim", "accepted", "rejected",
-		"name", "rating", "ics", "cores", "memory", "setboard":
+		"name", "rating", "ics", "cores", "memory":
 		// ignored / not applicable
 	case "quit":
 		return true
@@ -208,6 +229,32 @@ func (e *engine) ensureBooted() error {
 	return e.bootErr
 }
 
+// ensureReady blocks until boot completes and, if a setboard opening is pending,
+// applies it exactly once via SetupPosition (which sets the board and
+// side-to-move and validates the result). Called at the top of every think
+// goroutine so the opening is in place before Sargon's first move. Level/Easy
+// Mode set at boot are preserved across Analysis Mode.
+func (e *engine) ensureReady() error {
+	if err := e.ensureBooted(); err != nil {
+		return err
+	}
+	e.smu.Lock()
+	fen, once := e.pendingFEN, e.setupOnce
+	e.smu.Unlock()
+	if fen == "" || once == nil {
+		return nil
+	}
+	once.Do(func() {
+		if err := e.m.SetupPosition(fen); err != nil {
+			e.setupErr = fmt.Errorf("setboard %q: %w", fen, err)
+			log.Printf("SETBOARD FAILED (resigning): %v", e.setupErr)
+			return
+		}
+		log.Printf("SETBOARD ok: %s", fen)
+	})
+	return e.setupErr
+}
+
 // doUserMove processes an opponent move. The actual thinking runs in a
 // goroutine so the I/O loop keeps answering ping (liveness) while Sargon boots
 // and searches; otherwise cutechess declares a stalled connection.
@@ -219,7 +266,7 @@ func (e *engine) doUserMove(coord string) {
 // CTRL-S and plays the opening move, which is emitted as our move.
 func (e *engine) thinkFirstWhite() {
 	defer e.recoverResign("thinkFirstWhite")
-	if err := e.ensureBooted(); err != nil {
+	if err := e.ensureReady(); err != nil {
 		log.Printf("boot failed, resigning: %v", err)
 		e.resign()
 		return
@@ -342,7 +389,7 @@ func screenTokenToCoord(tok string, sargonWhite bool) string {
 
 func (e *engine) think(coord string) {
 	defer e.recoverResign("think")
-	if err := e.ensureBooted(); err != nil {
+	if err := e.ensureReady(); err != nil {
 		// Must not return without a move/resign, or cutechess deadlocks.
 		log.Printf("boot failed, resigning: %v", err)
 		e.resign()

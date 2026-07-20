@@ -28,6 +28,14 @@ Key methods (`Machine`):
 Emulation runs ~50M CPU cycles/sec wall (≈ 50x realtime); boot-to-prompt is
 ~120M cycles ≈ 2-3 s wall.
 
+**Headless speedup (~1.84x):** `NewMachine` constructs the Apple2 with
+`goapple2.WithLazyVideoScan()` — since we render nothing (null plotter), the
+emulator skips the per-cycle video scan and computes the floating bus on demand
+only when the CPU reads it. It is **bit-identical** for any program (verified:
+same RAM + text screen + step count after boot and a scripted game, lazy vs
+per-cycle; `internal/sargon/lazyvideo_ab_test.go`), and roughly halves emulation
+cost — matches run ~2x faster.
+
 ## Interfaces to Sargon
 
 **Input — keyboard text entry.** Moves are typed as `FROM-TO`, e.g. `E2-E4`,
@@ -203,6 +211,18 @@ Key implementation points, learned the hard way:
   usermove, so the adapter computes the reply but **holds it until `go`**.
 - `-budget-cycles N` uses the fair mechanism (Infinite + CTRL-T at N cycles);
   otherwise `-level`/`-easy` timed mode.
+- **`setboard` (varied openings)**: the adapter advertises `setboard=1` and, on
+  `setboard <fen>`, applies the position with the validated CTRL-A editor
+  `SetupPosition` (once, after boot, before the first move). cutechess sends it
+  for each game under `-openings file=tools/openings-pool.epd format=epd`. Sargon
+  plays whichever colour cutechess assigns: `go`-before-`usermove` → Sargon takes
+  the side to move (CTRL-S); `usermove` first → the opponent moves and Sargon
+  replies. Both verified (Sargon-White `Bxh6`, Sargon-Black `Nbd7` from a pool
+  position).
+- **`-budget-multiplier M`** scales `-budget-cycles` for Sargon only. Easy Mode
+  (needed for reliable headless reads) disables pondering, weakening Sargon vs
+  the real machine; giving Sargon `M`x our per-move compute approximates the lost
+  pondering. Bracket the truth with `M=1.5` and `M=2.0`.
 
 **Smoke game played** (our engine White, fast budget, vs Sargon level 1 Black):
 a complete 78-ply game via cutechess-cli ending in checkmate (`39...Qh4#`,
@@ -333,10 +353,23 @@ parsing (text + RAM) for normal moves / captures / castling; board RE
 (Infinite + CTRL-T at a chosen cycle budget), verified**; cycle-accurate clock
 in goapple2; **xboard adapter with a completed cutechess smoke game**;
 **validated arbitrary-position `SetupPosition` via the CTRL-A editor (40/40 pool
-positions round-trip; side-to-move verified behaviorally)**.
+positions round-trip; side-to-move verified behaviorally)**; **~1.84x headless
+speedup (lazy floating-bus video scan), bit-identical**; **varied-opening
+gauntlet wired: adapter `setboard` + `runs/sargon-pool-match.sh`, with a
+`-budget-multiplier` pondering-proxy handicap**.
 
-Follow-ups: **wire `SetupPosition` into a varied-opening gauntlet** (our engine
-vs Sargon from `tools/openings-pool.epd`, ~30M cycles/move both sides) for a
-reduced-variance anchored strength estimate — the `~70%`-draw problem this
-setup unblocks; optionally finish the hi-res display cross-check
-(per-(piece,file) dictionary); tournament-clock cross-check mode.
+### Rematch harness — READY (not yet run)
+
+`runs/sargon-pool-match.sh [ROUNDS] [BUDGET_CYCLES] [SARGON_MULT] [OUTDIR]`
+plays our engine vs Sargon from `tools/openings-pool.epd` (each opening both
+colours via `-openings ... -repeat -games 2`), so unbalanced starts produce
+decisive games instead of the standard-start ~70%-draw problem. Sargon gets
+`SARGON_MULT`x our per-move cycle budget to approximate its (Easy-Mode-disabled)
+pondering — run `MULT=1.5` and `MULT=2.0` to bracket. Launch under **tmux** (not
+nohup); check `CPU%` idle and leave 2-3 cores headroom before starting; poll the
+log for `SARGON-POOL-DONE`. Reclassify `SARGON-DECLARED-DRAW` (grep the debug
+log) as draws when tallying. Trigger the actual rematch once the strength ports
+(recap2, ordering) are in `asm/engine.bin`.
+
+Follow-ups: run the bracketed rematch; optionally finish the hi-res display
+cross-check (per-(piece,file) dictionary); tournament-clock cross-check mode.
