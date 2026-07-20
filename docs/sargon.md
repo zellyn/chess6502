@@ -180,6 +180,10 @@ go run ./cmd/sargon -boot 110000000 -script 'type:E2-E4\r; wait:8000000; dump'
 
 # Play mode: feed player moves, print Sargon's replies (screen + RAM), Easy Mode:
 go run ./cmd/sargon -play 'E2-E4,D2-D4,B1-C3' -level 3
+
+# Set an arbitrary FEN (validated), then have Sargon play it as White:
+go run ./cmd/sargon -fen 'r1bqk1nr/1ppp1ppp/2n5/p1b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq -' \
+  -sargon-white -budget-cycles 25000000
 ```
 
 ## xboard adapter (`cmd/sargon-xboard`)
@@ -229,18 +233,97 @@ adjudicates mate/stalemate/draws from the moves; a wrong claim (our game-over
 scrape can false-positive on "CHECK") would lose the game as an "invalid result
 claim".
 
-### KNOWN LIMITATION: no setboard / opening pool yet
+## Arbitrary-position setup via the CTRL-A board editor (WORKS, validated)
 
-Games run from the **standard start position** (opening variety comes from our
-engine's `-dither`). Setting an arbitrary FEN (e.g. `tools/openings-pool.epd`)
-does NOT work: Sargon reconstructs its board from the on-screen move list
-(replaying from a fixed template), so the `$60-$7F` piece list is a derived copy
-— poking it is reverted on the next move (a fresh game replays zero moves ->
-standard start). A search of RAM found no rank-structured master board under any
-stride, so proper setboard needs deeper reverse-engineering of Sargon's move-gen
-board / move-list state. `SetupPosition` parses the FEN and assigns slots
-correctly (unit-tested) but is a no-op on Sargon's actual position; left in with
-a clear caveat. This is the top follow-up for reduced-variance rating pools.
+`Machine.SetupPosition(fen)` sets Sargon to any FEN/EPD position headlessly and
+**validates** that it landed, so it can seed unbalanced-opening gauntlets. All
+40 `tools/openings-pool.epd` positions plus edge cases round-trip exactly (see
+`internal/sargon/setup_roundtrip_test.go`, `setup_behavior_test.go`; run with
+`SARGON_SLOW=1`).
+
+### Why poking `$60-$7F` fails but the editor works
+
+Sargon's authoritative game state is derived by replaying its move list from a
+base position, so poking the `$60-$7F` piece list is reverted. The **supported**
+way to set a base position is Analysis Mode (CTRL-A). Reverse-engineering what it
+does (by diffing RAM before/after) shows the clean primitive:
+
+- **While the CTRL-A editor is active, Sargon holds the edited position as a
+  plain 0x88-style board array in zero page based at `$80`**: the byte for a
+  square is at `$80 + rank*16 + file` (rank 0 = rank 1, file 0 = file a). Each
+  byte encodes the piece directly, independent of the slot list: **empty =
+  `$80`; a piece = colourBit | typeCode**, colourBit `$40` white / `$50` black,
+  typeCode **P=$0 N=$8 B=$A R=$C Q=$E K=$F**.
+- **On RETURN (exit), Sargon reconciles that board into its AUTHORITATIVE
+  state**: it rebuilds `$60-$7F` *and* the `$1120-$113F` new-game template, and
+  assigns castle status. This state **persists** — Sargon plays legal moves from
+  it and does not revert (verified: from a set position Sargon played `F4xH6`,
+  `C3-A4`, `D8-B6`, all illegal from the standard start).
+
+So `SetupPosition` drives the editor's **data**, not keystroke pantomime: press
+CTRL-A, poke the `$80` board, press RETURN. **Two keypresses**, each confirmed by
+a **RAM state change** (piece list cleared on enter, repopulated on exit), never
+a fixed delay — so nothing can be dropped or misordered. This sidesteps all the
+keypress-streaming fragility (dropped keys, cursor off-by-one, colour-toggle
+state) that pantomiming the editor's cursor/piece keys would incur.
+
+### Side-to-move: CTRL-C, not CTRL-S
+
+Side-to-move on a set-up position is set with **CTRL-C** ("Change Color with the
+Move" — the manual's Feature 19, the supported companion to Analysis Mode). Do
+**not** confuse it with **CTRL-S** (switch sides mid-game / "Sargon as White").
+The stable indicator is **`$0035`: `$01` = white to move, `$05` = black to
+move**. (`$0002` looks like a flag right after CTRL-C but is really editor
+scratch — do not use it.) Verified behaviorally: with the *same* board,
+white-to-move makes Sargon play a white piece, black-to-move a black piece.
+
+### Validation (built into `SetupPosition`)
+
+`SetupAndValidate` reads the position back on **two independent channels** and
+requires both to match the target, plus the side-to-move flag:
+
+1. **`$60-$7F` piece-slot list**, rendered by slot type (`PieceList.Board()`).
+2. **Re-entered `$80` editor board**: pressing CTRL-A again makes Sargon rebuild
+   its 0x88 board from the authoritative state; we read the actual piece-type
+   bytes and decode them, then exit leaving the position unchanged.
+
+Plus a **behavioral** check (`setup_behavior_test.go`): Sargon is asked to move
+and must play a *legal* move of the *correct colour* — the strongest,
+truly-independent confirmation, since Sargon computes it from its own
+authoritative state and would break loudly on a corrupt position.
+`SetupPosition` returns an error (not a silent wrong board) unless every channel
+agrees. `checkPieceCounts` also rejects positions the fixed slot list cannot
+hold (e.g. a promoted 3rd knight / 2nd queen), which the exit reconciliation
+would otherwise silently drop.
+
+### Limitations of what Sargon can represent
+
+- **Castling rights are inferred from home squares, not the FEN flags.** Per the
+  manual, Sargon assumes a K or R on its original square has never moved and
+  grants castling accordingly. So a FEN that *denies* castling while the K/R sit
+  home (moved-and-returned) will wrongly get castling, and vice-versa. For the
+  opening pool this matches (rights track home-square presence), but the `KQkq`
+  field is not honoured explicitly.
+- **En passant is not representable.** The editor has no ep-target input and
+  Sargon carries no "last move was a double push" state, so a one-time ep
+  capture in the FEN's ep field (several pool entries have `a6`/`b6`/`g6`/`h6`)
+  is unavailable to the side to move. Minor for an opening *start* position.
+- **50-move / repetition history resets** to zero at setup (irrelevant for
+  openings).
+
+### Hi-res display cross-check: DEFERRED (specific blocker)
+
+A third, display-side channel (decode the ESC hi-res board and compare) was
+scoped but deferred. Findings: the board is on **hi-res page 2** (`$4000`), ESC
+redraws it from the position, it is an 8x8 grid ~21-24 scanlines x ~4 bytes per
+square. A per-square **exact-bitmap dictionary** decode was prototyped but
+**does not** generalise: the same piece renders to *different* bytes on
+different files (glyphs are drawn at sub-byte, non-4-byte-aligned X offsets), so
+no single geometry gives a collision-free per-(piece,bg) table across positions.
+A working decoder needs a **per-(piece, file) bitmap dictionary** (or bit-level
+glyph alignment) — a bounded follow-up. It is **not on the game-correctness
+path**: the gauntlet reads the text move list + RAM (both validated), never the
+hi-res image, so a hypothetical display-vs-state desync could not corrupt games.
 
 ## Status / next steps
 
@@ -248,9 +331,12 @@ Done: headless boot; text-screen scraping; paced keyboard move injection; reply
 parsing (text + RAM) for normal moves / captures / castling; board RE
 (zero-page piece list); level table; **fair-match primitive `RequestMove`
 (Infinite + CTRL-T at a chosen cycle budget), verified**; cycle-accurate clock
-in goapple2; **xboard adapter with a completed cutechess smoke game**.
+in goapple2; **xboard adapter with a completed cutechess smoke game**;
+**validated arbitrary-position `SetupPosition` via the CTRL-A editor (40/40 pool
+positions round-trip; side-to-move verified behaviorally)**.
 
-Follow-ups: run a real matched match (our engine vs Sargon, ~30M cycles/move
-both sides, from `tools/openings-pool.epd` positions) for an anchored strength
-estimate; optionally support Sargon-as-White (CTRL-S) and the tournament-clock
-cross-check mode; wire an openings book into the adapter for varied games.
+Follow-ups: **wire `SetupPosition` into a varied-opening gauntlet** (our engine
+vs Sargon from `tools/openings-pool.epd`, ~30M cycles/move both sides) for a
+reduced-variance anchored strength estimate — the `~70%`-draw problem this
+setup unblocks; optionally finish the hi-res display cross-check
+(per-(piece,file) dictionary); tournament-clock cross-check mode.
