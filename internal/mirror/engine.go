@@ -11,11 +11,13 @@ type Engine struct {
 	MaxDepth int
 	Nodes    uint64
 
-	// FixFutilityGuard switches the RFP/futility mate-zone guard from
-	// the asm's current fall-through form (any negative alpha or beta
-	// disables the block) to the intended signed-aware test (only
-	// actual mate-zone bounds disable it). A/B experiment for the asm.
+	// FixFutilityGuard forces the signed-aware RFP/futility guard on
+	// (equivalent to Fut.CorrectGuard). Kept for the original guard A/B;
+	// prefer Fut for margin experiments.
 	FixFutilityGuard bool
+
+	// Fut configures the RFP/forward-futility block (guard + margins).
+	Fut FutilityParams
 
 	// LMR/PVS tuning knobs, defaulting to the asm's current rules.
 	LMR LMRParams
@@ -81,6 +83,37 @@ type LMRParams struct {
 // DefaultLMR mirrors the asm's current constants.
 var DefaultLMR = LMRParams{LateR1: 4, LateR2: 7, MinRemR1: 3, MinRemR2: 5, EvasionPVS: true}
 
+// FutilityParams configure the reverse-futility-pruning (RFP) and
+// forward (leaf) futility block in search(). The asm currently hard-
+// codes a single unsigned-compare guard plus two static margins
+// (120 @ remaining 1, 250 @ remaining 2). This struct makes both the
+// guard and the depth-indexed margins tunable so the corrected guard
+// can be re-margined rather than reverted.
+type FutilityParams struct {
+	// CorrectGuard selects the signed-aware guard (RFP/futility active
+	// in every non-mate-zone window). The asm's current guard uses an
+	// unsigned compare, so ANY negative alpha or beta silently disables
+	// the block — a bug. false reproduces that bug; true is the fix.
+	CorrectGuard bool
+	// RFP is the reverse-futility margin indexed by remaining depth
+	// (RFP[r] used when remaining == r). A zero margin disables RFP at
+	// that depth. MaxRem bounds how deep the block is considered.
+	RFP    [8]int
+	MaxRem int
+	// Fut is the forward (leaf) futility margin, applied at remaining 1
+	// only (skip quiets when eval + Fut <= alpha). 0 disables it.
+	Fut int
+}
+
+// DefaultFutility reproduces the asm's current shipped behavior: the
+// unsigned-compare guard and the two static margins.
+var DefaultFutility = FutilityParams{
+	CorrectGuard: false,
+	RFP:          [8]int{0, 120, 250},
+	MaxRem:       2,
+	Fut:          120,
+}
+
 // QSParams shape the quiescence search. QS ply = PLY - MAXDEPTH.
 type QSParams struct {
 	// PlyCap: at qs ply >= this, non-evasion nodes return the stand-pat
@@ -94,7 +127,7 @@ type QSParams struct {
 // NewEngine returns an engine with all features on and the asm's
 // current pstruct weights and LMR rules.
 func NewEngine() *Engine {
-	e := &Engine{Features: FtAll, Weights: DefaultWeights, LMR: DefaultLMR}
+	e := &Engine{Features: FtAll, Weights: DefaultWeights, LMR: DefaultLMR, Fut: DefaultFutility}
 	for i := range e.moves {
 		e.moves[i] = make([]Move, 0, 128)
 	}

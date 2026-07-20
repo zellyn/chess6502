@@ -16,6 +16,7 @@ type PlayerCfg struct {
 	LMR         *LMRParams
 	QS          QSParams
 	FixFutility bool
+	Fut         *FutilityParams
 	KB          *KBTables
 }
 
@@ -27,6 +28,9 @@ func (c *PlayerCfg) engine() *Engine {
 	}
 	e.QS = c.QS
 	e.FixFutilityGuard = c.FixFutility
+	if c.Fut != nil {
+		e.Fut = *c.Fut
+	}
 	e.KB = c.KB
 	return e
 }

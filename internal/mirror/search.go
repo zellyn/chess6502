@@ -128,30 +128,32 @@ func (e *Engine) search() int {
 				return e.beta[ply]
 			}
 		}
-		// RFP + futility at remaining <= 2, guarded away from mate-zone
-		// windows. The asm's current guard falls through so that ANY
-		// negative alpha or beta skips this block — futility fires only
-		// when the whole window is in [0, +mate-zone). FixFutilityGuard
-		// is the intended signed-aware test (only actual mate-zone
-		// bounds disable it) — the A/B for the asm fix.
-		guardOK := e.alpha[ply] >= 0 && e.alpha[ply] < mateZoneLo &&
-			e.beta[ply] >= 0 && e.beta[ply] < mateZoneLo
-		if e.FixFutilityGuard {
+		// RFP + forward futility, guarded away from mate-zone windows.
+		// The asm's current guard uses an unsigned compare, so ANY
+		// negative alpha or beta silently skips the block (futility
+		// fires only when the whole window is in [0, +mate-zone)) — a
+		// bug. The signed-aware guard (Fut.CorrectGuard / the deprecated
+		// FixFutilityGuard) enables the block in every non-mate window;
+		// the margins (Fut.RFP by remaining depth, Fut.Fut for the leaf)
+		// are then the real tuning surface, since the corrected guard
+		// re-margined is the port target, not the reverted bug.
+		correctGuard := e.FixFutilityGuard || e.Fut.CorrectGuard
+		var guardOK bool
+		if correctGuard {
 			guardOK = e.alpha[ply] > nmateZoneHi && e.alpha[ply] < mateZoneLo &&
 				e.beta[ply] > nmateZoneHi && e.beta[ply] < mateZoneLo
+		} else {
+			guardOK = e.alpha[ply] >= 0 && e.alpha[ply] < mateZoneLo &&
+				e.beta[ply] >= 0 && e.beta[ply] < mateZoneLo
 		}
 		if e.Features&FtFutil != 0 && guardOK {
 			remaining := e.MaxDepth - ply
-			if remaining < 3 {
+			if remaining >= 1 && remaining <= e.Fut.MaxRem {
 				ev := e.eval()
-				margin := 120
-				if remaining >= 2 {
-					margin = 250
-				}
-				if ev-margin >= e.beta[ply] {
+				if m := e.Fut.RFP[remaining]; m > 0 && ev-m >= e.beta[ply] {
 					return e.beta[ply] // reverse futility: fail high
 				}
-				if remaining == 1 && ev+margin <= e.alpha[ply] {
+				if remaining == 1 && e.Fut.Fut > 0 && ev+e.Fut.Fut <= e.alpha[ply] {
 					e.futile[ply] = true
 				}
 			}

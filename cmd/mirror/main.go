@@ -159,14 +159,16 @@ func match(args []string) {
 	bQS := fs.String("bqs", "0,0", "B QS shape")
 	aKB := fs.String("akb", "", "A king-bucket table file (empty = off)")
 	bKB := fs.String("bkb", "", "B king-bucket table file")
+	aFut := fs.String("afut", "", "A futility params: guard,rfp1,rfp2,rfp3,rfp4,fut,maxrem (empty = shipped)")
+	bFut := fs.String("bfut", "", "B futility params")
 	fs.Parse(args)
 
 	lines, err := mirror.GenOpenings(sprt.Openings, *pairs, *seed)
 	check(err)
 	a := mirror.PlayerCfg{Features: byte(*aMask), Weights: parseWeights(*aw), Depth: *depth,
-		FixFutility: *aFix, LMR: parseLMR(*aLMR), QS: parseQS(*aQS), KB: loadKB(*aKB)}
+		FixFutility: *aFix, LMR: parseLMR(*aLMR), QS: parseQS(*aQS), KB: loadKB(*aKB), Fut: parseFut(*aFut)}
 	b := mirror.PlayerCfg{Features: byte(*bMask), Weights: parseWeights(*bw), Depth: *depth,
-		FixFutility: *bFix, LMR: parseLMR(*bLMR), QS: parseQS(*bQS), KB: loadKB(*bKB)}
+		FixFutility: *bFix, LMR: parseLMR(*bLMR), QS: parseQS(*bQS), KB: loadKB(*bKB), Fut: parseFut(*bFut)}
 	start := time.Now()
 	res, err := mirror.Match(a, b, lines, *pairs, *workers, *seed)
 	check(err)
@@ -278,6 +280,26 @@ func tunekb(args []string) {
 	if *out != "" {
 		check(mirror.SaveKB(*out, kb))
 		fmt.Printf("saved KB tables to %s\n", *out)
+	}
+}
+
+// parseFut parses "guard,rfp1,rfp2,rfp3,rfp4,fut,maxrem" into a
+// FutilityParams; empty means the shipped default (nil).
+func parseFut(s string) *mirror.FutilityParams {
+	if s == "" {
+		return nil
+	}
+	var guard, r1, r2, r3, r4, fut, maxRem int
+	n, err := fmt.Sscanf(s, "%d,%d,%d,%d,%d,%d,%d", &guard, &r1, &r2, &r3, &r4, &fut, &maxRem)
+	if err != nil || n != 7 {
+		fmt.Fprintf(os.Stderr, "bad futility params %q (want guard,rfp1,rfp2,rfp3,rfp4,fut,maxrem)\n", s)
+		os.Exit(2)
+	}
+	return &mirror.FutilityParams{
+		CorrectGuard: guard != 0,
+		RFP:          [8]int{0, r1, r2, r3, r4},
+		MaxRem:       maxRem,
+		Fut:          fut,
 	}
 }
 

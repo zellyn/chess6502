@@ -175,6 +175,59 @@ func TestQSShapeNodes(t *testing.T) {
 	}
 }
 
+// TestFutilityMarginNodes: depth-6 node counts for candidate futility
+// margin schemes, all with the CORRECT (signed-aware) guard, vs the
+// shipped baseline (buggy guard + 120/250 margins). Phase A of task #34:
+// find schemes that keep a meaningful share of the correct-guard node
+// saving; the promising band graduates to self-play matches.
+func TestFutilityMarginNodes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	shipped := DefaultFutility // buggy guard, RFP 120/250, Fut 120
+	cg := func(rfp [8]int, fut, maxRem int) FutilityParams {
+		return FutilityParams{CorrectGuard: true, RFP: rfp, MaxRem: maxRem, Fut: fut}
+	}
+	variants := []struct {
+		name string
+		p    FutilityParams
+	}{
+		{"shipped (buggy 120/250)", shipped},
+		{"correct 120/250", cg([8]int{0, 120, 250}, 120, 2)},
+		{"correct 200/350", cg([8]int{0, 200, 350}, 120, 2)},
+		{"correct 250/450", cg([8]int{0, 250, 450}, 120, 2)},
+		{"correct 300/500", cg([8]int{0, 300, 500}, 120, 2)},
+		{"correct 150/300", cg([8]int{0, 150, 300}, 120, 2)},
+		{"correct 175/350", cg([8]int{0, 175, 350}, 120, 2)},
+		{"correct 120/500", cg([8]int{0, 120, 500}, 120, 2)},
+		{"correct 120/700", cg([8]int{0, 120, 700}, 120, 2)},
+		{"correct rfp2-only 500", cg([8]int{0, 0, 500}, 120, 2)},
+		{"correct depth3 120/250/400", cg([8]int{0, 120, 250, 400}, 120, 3)},
+		{"correct depth3 200/350/500", cg([8]int{0, 200, 350, 500}, 120, 3)},
+	}
+	fens := benchFENs(t)
+	var baseTotal uint64
+	for vi, v := range variants {
+		var total uint64
+		for _, fen := range fens {
+			pos, err := ParseFEN(fen)
+			if err != nil {
+				t.Fatal(err)
+			}
+			eng := NewEngine()
+			eng.Fut = v.p
+			eng.SetPosition(pos)
+			eng.SearchFixed(6)
+			total += eng.Nodes
+		}
+		if vi == 0 {
+			baseTotal = total
+		}
+		t.Logf("%-30s total %8d (%+6.1f%% vs shipped)",
+			v.name, total, 100*(float64(total)/float64(baseTotal)-1))
+	}
+}
+
 // TestFutilityGuardNodes: fixed-depth node counts, current vs fixed
 // mate-zone guard, all features on.
 func TestFutilityGuardNodes(t *testing.T) {
