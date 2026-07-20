@@ -3,6 +3,91 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-20 — node-budgeted self-play + the conversion re-measurements (task #42)
+
+Built a **node-budgeted self-play mode** in the mirror
+(`internal/mirror/search.go` `SearchBudget`, wired through
+`PlayerCfg.NodeBudget` and `cmd/mirror match -budget`). Each move runs
+iterative deepening, reusing killers/history/TT across iterations,
+spending up to a per-move NODE budget, then plays the best move from the
+last COMPLETED iteration (start a new iteration only under ~50% budget; a
+hard cap at the budget aborts an in-flight iteration whose partial result
+is discarded; depth 1 always completes so a move is always produced).
+Because the cap is denominated in **nodes, never wall time**, a game is a
+pure deterministic function of (position, budget, features, dither seed)
+— A/B replays bit-identically (`TestBudgetDeterminism`). Also fixed a
+latent A/B-cleanliness hole: `Match` now seeds dither **per pair**, not
+per worker, so a match result is reproducible regardless of worker-pool
+scheduling (`TestBudgetMatchRuns`, 1 worker == 4 workers). Fixed-depth
+mode is untouched.
+
+**WHY this mode exists:** fixed-depth self-play is structurally blind to
+node-saving features — ordering/LMR/futility/QS-shaping change *which*
+node cuts, not the minimax value, so they read neutral at fixed depth.
+Under a budget the saved nodes buy extra search depth = real Elo. This is
+the conversion the asm futility port already showed (~+47 Elo LOS 91%
+time-budgeted vs the mirror's +4 at fixed depth). Now the mirror sees it.
+
+All matches below: **30 000 nodes/move, 250 pairs = 500 games**, vs the
+FtAll (0x1f) baseline unless noted; fixed-depth numbers are the task #35
+/ #29 depth-6 measurements for the same feature.
+
+**(a) Move-ordering enablers — the node savings DO convert to Elo:**
+
+| enabler (node saving)      | fixed-depth Elo | node-budget Elo (500g) |
+|----------------------------|-----------------|------------------------|
+| SEE (−24%)                 | +0 ± 31         | **+31 ± 26**           |
+| history+malus (−42%)       | +8 ± 30         | **+56 ± 25**           |
+| SEE+history (−46%)         | −2 ± 31         | **+64 ± 25**           |
+
+Verdict: **confirmed, and large.** The ~24–46% smaller tree is not free-
+but-neutral as fixed depth implied — under a budget it is worth
++31/+56/+64 Elo. This is the number we'd been inferring but could not
+measure. History carries most of it (the deeper the reuse across ID
+iterations, the more its quiet ordering compounds). These are now the
+clear asm port targets for the "land wins in the 6502 code" goal.
+
+**(b) QS recap2 (#29, −21% nodes):** fixed-depth neutral → **+30 ± 25**
+under budget. Verdict: **confirmed** — the cheaper quiescence (recaptures-
+only past qs-ply 2) spends its saving on depth for +30 Elo. Worth porting.
+
+**(c) THE STRESS TEST — aggressive LMR under a node budget (the #35
+falsification re-test).** At FIXED depth, with STRONG ordering
+(SEE+history+malus, 0x7f) held identical on both sides, aggressive LMR
+was *worse* (the negative ordering×LMR coupling). Re-run under the node
+budget, strong ordering both sides, aggressive-LMR side vs default-LMR
+(4,7,3,5) side:
+
+| aggressive LMR   | fixed-depth (strong ord) | node-budget (strong ord)        |
+|------------------|--------------------------|---------------------------------|
+| late 3,6 (3,6,3,5) | −20 (6502), −15 (777)  | **+15 ± 25 (6502), +3 ± 25 (777)** |
+| rem1=2 (4,7,2,5)   | −62 (6502), −41 (777)  | **−5 ± 25 (6502), −6 ± 24 (777)**  |
+
+**Verdict: the negative coupling SOFTENS sharply — for one variant it
+FLIPS.** rem1=2 goes from strongly negative (−62/−41) to essentially
+neutral (−5/−6): the extra depth its saved nodes buy almost exactly
+cancels the reduction cost that fixed depth counted as pure loss, but no
+net gain — lowering the min-remaining floor is a wash, **do NOT port it.**
+The 3,6,3,5 variant (lower the late-move reduction *rank* thresholds)
+flips from −20/−15 to **+15/+3** (avg ≈ +9, one seed clears its bar): the
+saved-nodes-into-depth trade is net-positive here. So fixed-depth
+measurement was **directionally wrong** about aggressive LMR — it is not
+uniformly harmful under a budget; it depends on WHICH knob.
+
+**LMR port recommendation (gates task #41):** carry **3,6,3,5** (late1=3,
+late2=6) — not rem1=2 — into the asm as the LMR-change candidate for a
+TIME-budgeted SPRT, which is the real gate. Expected ≈ +3…+15 Elo; the
+mirror can no longer call it neutral/negative. Skip rem1=2. (Not run here
+to free cores: a larger-budget robustness sweep and more seeds — nice-to-
+have if the asm SPRT is ambiguous, not required.)
+
+**Methodological upshot:** every node-saving feature we'd shelved as
+"fixed-depth neutral" (ordering, recap2) is in fact a +30…+64 Elo win
+under a budget, and at least one "fixed-depth negative" (3,6,3,5 LMR)
+is actually positive. Fixed-depth Elo is a floor, not the verdict, for
+this whole feature class; the budget mode is now the mirror's primary
+A/B rig for them.
+
 ## 2026-07-20 — FIRST benchmark vs Sargon III at matched 30M-cyc/move (task #36) — ROUGHLY EVEN (preliminary)
 
 Our first head-to-head against the historical bar: our engine vs **Sargon III**
