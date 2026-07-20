@@ -247,8 +247,16 @@ func (e *engine) thinkFirstWhite() {
 func (e *engine) claimGameOver(res sargon.MoveResult) {
 	msg := strings.ToUpper(res.Message)
 	if strings.Contains(msg, "DRAW") || strings.Contains(msg, "STALEMATE") {
-		e.send("1/2-1/2 {SargonIII: %s}", res.Message)
-		return
+		// Sargon declares a draw (usually 3-fold repetition) one ply before
+		// cutechess counts it, so a "1/2-1/2" result claim is rejected and
+		// deadlocks the match. Resign instead so the game ends cleanly; log it
+		// distinctly (with material balance) so these games — which are really
+		// draws — can be reclassified when tallying the match.
+		bal := res.Board.MaterialBalance()
+		if e.m != nil && !e.m.SargonWhite {
+			bal = -bal
+		}
+		log.Printf("SARGON-DECLARED-DRAW material=%+d (resigning to end game; reclassify as draw)", bal)
 	}
 	e.resign()
 }
