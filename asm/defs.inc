@@ -143,7 +143,11 @@ TTENTRY   = $F2         ; 8-byte staging copy of a TT entry:
                         ;  +5/6 score LE, +7 depth<<2 | bound
 FEATURES  = $FA         ; search feature bits (poked by the rig)
 REMDEPTH  = $FB         ; scratch: remaining depth at this node
-FUTMARG   = $FC         ; scratch: futility margin work
+FUTMARG   = $FC         ; scratch: futility margin low byte
+FUTMARGH  = T3          ; futility margin high byte (rem2 margin 500 needs
+                        ;  16 bits); reuses $CE scmp16 scratch - provably
+                        ;  dead in the futility block (no scmp16 call there,
+                        ;  and eval clobbers it just before we set it)
 SEED      = $FD         ; eval-dither PRNG state; 0 (default) = no dither.
                         ; On hardware this gets seeded from keypress
                         ; timing; the bridge pokes a random byte.

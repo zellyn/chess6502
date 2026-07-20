@@ -426,41 +426,61 @@ snonull:
         ; not inside a mate zone (static eval can't speak to mates)
         lda FEATURES
         and #FT_FUTIL
-        bne :+
-        jmp sprepj
-:       lda ALPHAHI,y
-        bpl :+
+        bne gstart
+gskip:  jmp sprepj              ; trampoline: the guard skips below are past
+                                ;  branch range once the block grew
+        ; SIGNED guard: skip only in a TRUE mate zone. A negative hi byte
+        ; ($80-$FF) is >= MATEZONEHI ($74) unsigned, so the winning-mate
+        ; cmp must run ONLY on the alpha/beta >= 0 path - otherwise every
+        ; negative-window node wrongly skips futility (the old bug).
+gstart: lda ALPHAHI,y
+        bpl rfpapos             ; alpha >= 0: test winning-mate zone
         cmp #NMATEZONEHI
-        bcc sprepj              ; alpha in the losing-mate zone
-:       cmp #MATEZONEHI
-        bcs sprepj              ; alpha in the winning-mate zone
+        bcc gskip               ; alpha in the losing-mate zone
+        bcs rfpaok              ; alpha negative, not mate: futility active
+rfpapos:
+        cmp #MATEZONEHI
+        bcs gskip               ; alpha in the winning-mate zone
+rfpaok:
         lda BETAHI,y
-        bpl :+
+        bpl rfpbpos             ; beta >= 0: test winning-mate zone
         cmp #NMATEZONEHI
-        bcc sprepj              ; beta in the losing-mate zone
-:       cmp #MATEZONEHI
-        bcs sprepj              ; beta in the winning-mate zone
+        bcc gskip               ; beta in the losing-mate zone
+        bcs rfpbok              ; beta negative, not mate: futility active
+rfpbpos:
+        cmp #MATEZONEHI
+        bcs gskip               ; beta in the winning-mate zone
+rfpbok:
         lda MAXDEPTH
         sec
         sbc PLY
         sta REMDEPTH
         cmp #3
-        bcs sprepj
+        bcs gskip
         jsr eval
         ldy PLY
-        lda #120                ; margin: 120 at depth 1, 250 at depth 2
+        ; margin: 120 @ rem1, 500 @ rem2 (16-bit; 500 = $01F4). rem2 at
+        ; the tight 250 over-pruned negative windows (mirror task #34).
         ldx REMDEPTH
         cpx #2
-        bcc :+
-        lda #250
-:       sta FUTMARG
+        bcc rfpm1
+        lda #$F4
+        sta FUTMARG
+        lda #$01
+        sta FUTMARGH
+        bne rfphave             ; always (hi = $01)
+rfpm1:  lda #120
+        sta FUTMARG
+        lda #0
+        sta FUTMARGH
+rfphave:
         ; reverse futility: eval - margin >= beta -> fail high
         sec
         lda SCORE
         sbc FUTMARG
         sta T0
         lda SCORE+1
-        sbc #0
+        sbc FUTMARGH
         sta T1
         sec
         lda T0
@@ -484,7 +504,7 @@ srfpno: ; futility (depth 1): eval + margin <= alpha -> quiets can't help
         adc FUTMARG
         sta T0
         lda SCORE+1
-        adc #0
+        adc FUTMARGH
         sta T1
         sec
         lda ALPHALO,y
