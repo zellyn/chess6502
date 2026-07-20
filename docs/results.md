@@ -3,6 +3,44 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-20 — FIRST benchmark vs Sargon III at matched 30M-cyc/move (task #36) — ROUGHLY EVEN (preliminary)
+
+Our first head-to-head against the historical bar: our engine vs **Sargon III**
+(1983, Spracklens), **both sides ~30M 6502 cycles/move** — our standing ~30 s
+budget. This is a *benchmark vs Sargon III at matched compute*, NOT a calibrated
+Elo.
+
+Method: Sargon is driven headless in goapple2 (`internal/sargon`,
+`cmd/sargon-xboard`, `runs/sargon-match.sh`). Fair per-move compute via
+**Infinite level (SHIFT-9) + CTRL-T after exactly 30M cycles** (`RequestMove`);
+our engine `-budget 29411` ms (≈30.6M cyc) matches. cutechess-cli, color-paired
+(Sargon alternates W/B via the CTRL-S path), sequential, from the **standard
+start** (see caveat), our engine `-dither` for opening variety.
+
+Result (first **10** games; the detached 40-game batch continues and its final
+tally supersedes this): raw cutechess **us 8–2**, but 7 of those "wins" are
+Sargon-declared repetition draws the adapter has to resign (see caveat) —
+**reclassified: us 1 W – 2 L – 7 D over 10 = ~45% (≈ −35 Elo, CI huge at n=10)**.
+Essentially even; **draw-heavy (~70%)**; decisive games 1–2 to Sargon.
+
+**Verdict: our engine is COMPETITIVE with the ~1550–1600 Sargon III bar at
+matched 30M-cyc/move** — a strong first benchmark. Read with three caveats
+(smaller effect than it looks): (1) small sample, run continuing to 40; (2)
+**CTRL-T interrupts Sargon mid-search-iteration**, playing its best-move-so-far
+rather than a completed iteration, which likely *understates* Sargon's natural
+strength — the number is a floor on Sargon, a ceiling on us; (3) opening variety
+is our-engine dither from the start position, not `openings-pool.epd`.
+
+Known limitations / follow-ups (all in docs/sargon.md): **setboard doesn't work**
+— Sargon reconstructs its board from its on-screen move list, so poking the
+$60–$7F piece list reverts; the opening pool needs Sargon master-board RE.
+**Repetition draws**: Sargon declares a 3-fold one ply before cutechess counts
+it, so a "1/2-1/2" claim is rejected and deadlocks; the adapter resigns instead
+and logs `SARGON-DECLARED-DRAW`, reclassified here as draws. A cleaner match
+wants those two fixed (real draw results) and, ideally, a natural-time-control
+cross-check (Sargon SHIFT-3 = 30 s/move vs our matched banked clock) to bound
+the CTRL-T interruption effect.
+
 ## 2026-07-20 — move-ordering enablers + the ordering×pruning coupling test (task #35)
 
 Built the three ordering enablers in the mirror (internal/mirror/
