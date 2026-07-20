@@ -133,9 +133,11 @@ func main() {
 	//   BBLOCKM[bits] = ranks <= the most advanced black pawn (ditto <=)
 	//   BPASSB[bits]  = PASSEDBONUS[7 - that rank]
 	// The passed-pawn bonus weights live HERE now. Values are the
-	// Texel-tuned set from the Go mirror (validated +18 +/- 17 vs
-	// no-pstruct over 800 mirror games; see docs/results.md).
-	passedBonus := []int{0, 18, 0, 33, 62, 69, 28, 0}
+	// Texel-tuned set from the Go mirror, re-tuned on the diversified
+	// (real-opponent) corpus: self-play overvalued advanced passed pawns,
+	// corrected down ~20-25%. Asm rig confirms do-no-harm (+8.1 +/- 22.4
+	// over 600 games); see docs/results.md.
+	passedBonus := []int{0, 15, 0, 21, 50, 52, 20, 0}
 	var rankBit [128]byte
 	for sq := range rankBit {
 		if sq&0x88 == 0 {

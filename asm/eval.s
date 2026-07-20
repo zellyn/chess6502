@@ -463,7 +463,7 @@ ptfile: lda PWBITS,x
         jsr ptsub12
 :       jsr ptneighw            ; isolated: no own pawns on neighbors
         bne :+
-        jsr ptsub10
+        jsr ptsub7
 :       jsr ptorb3              ; A = black bits on files x-1..x+1
         and WBLOCKM,y           ; any black pawn at rank >= our best?
         bne ptwd0
@@ -480,7 +480,7 @@ ptwd0:  ; black side, mirrored (advancement = low rank)
         jsr ptadd12
 :       jsr ptneighb
         bne :+
-        jsr ptadd10
+        jsr ptadd7
 :       jsr ptorw3
         and BBLOCKM,y
         bne ptnextf
@@ -535,11 +535,11 @@ ptadd12:
 ptsub12:
         lda #12
         bne ptsuba              ; always
-ptadd10:
-        lda #10                 ; isolated (Texel-tuned)
+ptadd7:
+        lda #7                  ; isolated (Texel-tuned, diversified corpus)
         bne ptadda              ; always
-ptsub10:
-        lda #10
+ptsub7:
+        lda #7
         bne ptsuba              ; always
 
 ; ptneighw/b: Z set if both neighbor files have no own pawns.
