@@ -33,18 +33,52 @@ exec "$OUT/us" -bin "$OUT/engine.bin" -defs "$REPO/asm/defs.inc" -budget ${US_BU
 EOF
 cat > "$OUT/run-sargon.sh" <<EOF
 #!/bin/zsh
-exec "$OUT/sargon-xb" -dsk "$REPO/assets/sargon-iii.dsk" -budget-cycles ${BUDGET}
+exec "$OUT/sargon-xb" -dsk "$REPO/assets/sargon-iii.dsk" -budget-cycles ${BUDGET} -debug 2>>"$OUT/sargon-debug.log"
 EOF
 chmod +x "$OUT/run-us.sh" "$OUT/run-sargon.sh"
+
+# Watchdog: a repetition draw can deadlock cutechess — Sargon declares the
+# 3-fold one ply before cutechess counts it, so the result claim is rejected and
+# both engines sit idle forever. If BOTH engine processes stay ~idle for a while,
+# kill the Sargon process so cutechess ends that game (disconnect) and moves on.
+# Such games are really draws; they are logged so they can be discounted.
+watchdog() {
+  local idle=0
+  while true; do
+    sleep 15
+    pgrep -f "$REPO/tools/cutechess-cli" >/dev/null 2>&1 || return
+    local uc sc
+    uc=$(ps -o %cpu= -p "$(pgrep -f "$OUT/us" | head -1)" 2>/dev/null | tr -d ' ')
+    sc=$(ps -o %cpu= -p "$(pgrep -f "$OUT/sargon-xb" | head -1)" 2>/dev/null | tr -d ' ')
+    if [[ "${uc%%.*}" == "0" && "${sc%%.*}" == "0" ]]; then
+      idle=$((idle+1))
+    else
+      idle=0
+    fi
+    if (( idle >= 3 )); then
+      echo "WATCHDOG: killing stalled sargon-xb (likely a repetition-draw deadlock)"
+      pkill -f "$OUT/sargon-xb"
+      idle=0
+    fi
+  done
+}
+watchdog &
+WATCHDOG_PID=$!
 
 echo "starting cutechess at $(date)"
 # restart=on for Sargon: cutechess starts a fresh sargon-xb process each game,
 # so Sargon boots clean every time (an in-process reboot corrupts the emulator).
+# Both engines report scores (our UCI engine; Sargon a material eval via the
+# adapter), so cutechess adjudicates: -resign ends decided games fast (Sargon is
+# usually up material) and -draw ends dead-equal shuffles, avoiding long games
+# and Sargon's own draw-claim (which can hang cutechess on a 3-fold off-by-one).
 "$REPO/tools/cutechess-cli" \
   -engine name=us cmd="$OUT/run-us.sh" proto=uci \
   -engine name=SargonIII cmd="$OUT/run-sargon.sh" proto=xboard restart=on \
   -each tc=inf -rounds "$ROUNDS" -games 2 -maxmoves 160 -ratinginterval 1 \
+  -resign movecount=5 score=900 -draw movenumber=40 movecount=10 score=20 \
   -pgnout "$OUT/sargon-match.pgn" || true
 
+kill "$WATCHDOG_PID" 2>/dev/null
 echo "cutechess exited at $(date)"
 echo "SARGON-MATCH-DONE"

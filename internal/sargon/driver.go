@@ -11,7 +11,7 @@ const (
 	// MaxBootSteps bounds the wait for the program to reach its move-entry
 	// state. Sargon III finishes loading from the (slow, emulated) Disk II in
 	// roughly 100M cycles.
-	MaxBootSteps = 160_000_000
+	MaxBootSteps = 250_000_000
 
 	// pollChunk is how many CPU steps to run between checks while waiting.
 	pollChunk = 500_000

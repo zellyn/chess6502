@@ -220,7 +220,8 @@ func (e *engine) doUserMove(coord string) {
 func (e *engine) thinkFirstWhite() {
 	defer e.recoverResign("thinkFirstWhite")
 	if err := e.ensureBooted(); err != nil {
-		e.send("tellusererror boot failed: %v", err)
+		log.Printf("boot failed, resigning: %v", err)
+		e.resign()
 		return
 	}
 	res, err := e.m.StartAsWhite(e.budgetCycles)
@@ -334,8 +335,9 @@ func screenTokenToCoord(tok string, sargonWhite bool) string {
 func (e *engine) think(coord string) {
 	defer e.recoverResign("think")
 	if err := e.ensureBooted(); err != nil {
-		e.send("tellusererror boot failed: %v", err)
-		log.Printf("boot failed: %v", err)
+		// Must not return without a move/resign, or cutechess deadlocks.
+		log.Printf("boot failed, resigning: %v", err)
+		e.resign()
 		return
 	}
 	sargonText, err := coordToSargon(coord)
@@ -386,10 +388,16 @@ func (e *engine) think(coord string) {
 	}
 	e.smu.Unlock()
 
-	// Emit only the move. Never claim a result: cutechess adjudicates
-	// mate/stalemate/draws itself from the moves, and a wrong claim (our
-	// game-over scrape can false-positive on "CHECK") loses the game as an
-	// "invalid result claim".
+	// Report a material score (CECP thinking line "ply score time nodes pv")
+	// so cutechess can adjudicate draws (dead-equal shuffles) and resignations
+	// (lopsided games) itself — this ends repetition draws cleanly (Sargon's
+	// own draw claim can hang cutechess on an off-by-one 3-fold count) and
+	// speeds up decided games.
+	bal := res.Board.MaterialBalance() // white - black
+	if e.m != nil && !e.m.SargonWhite {
+		bal = -bal // from Sargon's (Black) perspective
+	}
+	e.send("1 %d 0 1 %s", bal, reply)
 	e.send("move %s", reply)
 }
 

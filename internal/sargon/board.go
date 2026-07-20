@@ -170,6 +170,42 @@ func (pl PieceList) Board() string {
 	return string(out)
 }
 
+// pieceValueCP is the centipawn value of the piece in slot i (0-15).
+func pieceValueCP(i int) int {
+	switch PieceIndexType(i) {
+	case Pawn:
+		return 100
+	case Knight:
+		return 320
+	case Bishop:
+		return 330
+	case Rook:
+		return 500
+	case Queen:
+		return 900
+	}
+	return 0 // king
+}
+
+// MaterialBalance returns White's material minus Black's, in centipawns
+// (positive = White ahead). Captured pieces (off-board) count zero; a promoted
+// pawn is still valued as a pawn (a minor undercount, fine for adjudication).
+func (pl PieceList) MaterialBalance() int {
+	bal := 0
+	for i, sq := range pl {
+		if !sq.Valid() {
+			continue
+		}
+		v := pieceValueCP(i % 16)
+		if i < 16 {
+			bal += v
+		} else {
+			bal -= v
+		}
+	}
+	return bal
+}
+
 // Move is a from/to move decoded from a piece-list diff.
 type Move struct {
 	From, To Square
