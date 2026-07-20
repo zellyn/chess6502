@@ -47,8 +47,13 @@ func romDir() string {
 
 // NewMachine constructs a headless Apple ][+ (48K + language card) with a Disk
 // II controller in slot 6 and the given .dsk mounted in drive 1. It does not
-// step the CPU; call Run/RunUntil to advance.
+// step the CPU; call Run/RunUntil to advance. It enables the lazy floating-bus
+// video scan (headless speedup); use newMachine(dsk, false) to compare.
 func NewMachine(dskPath string) (*Machine, error) {
+	return newMachine(dskPath, true)
+}
+
+func newMachine(dskPath string, lazyVideo bool) (*Machine, error) {
 	dir := romDir()
 	romPath := filepath.Join(dir, "apple2+.rom")
 	charPath := filepath.Join(dir, "apple2-chars.rom")
@@ -58,7 +63,15 @@ func NewMachine(dskPath string) (*Machine, error) {
 	charRom := util.ReadSmallCharacterRomOrDie(charPath)
 	diskRom := util.ReadRomOrDie(diskRomPath, 256)
 
-	a2 := goapple2.NewApple2(nullPlotter{}, rom, charRom)
+	// Headless: WithLazyVideoScan skips the per-cycle video scan (we render
+	// nothing via nullPlotter) and computes the floating bus on demand. It is
+	// behavior-identical for any program, including one that reads the floating
+	// bus, but roughly halves the CPU cost of emulation -- ~2x faster matches.
+	var opts []goapple2.Option
+	if lazyVideo {
+		opts = append(opts, goapple2.WithLazyVideoScan())
+	}
+	a2 := goapple2.NewApple2(nullPlotter{}, rom, charRom, opts...)
 
 	// Language card in slot 0 (matches the GUI setup; harmless for a ][+ 48K
 	// program and required by anything that banks $D000).
