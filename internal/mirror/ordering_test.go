@@ -1,6 +1,98 @@
 package mirror
 
-import "testing"
+import (
+	"os"
+	"strconv"
+	"testing"
+)
+
+// comboOpenings builds a set of balanced opening lines for the harness,
+// from a handful of standard first moves plus a random 2-ply tail (the
+// same recipe as the CLI match driver, but self-contained so the test
+// needs no sprt import).
+func comboOpenings(t *testing.T, n int, seed uint64) [][]string {
+	bases := [][]string{
+		{"e2e4", "e7e5"}, {"e2e4", "c7c5"}, {"d2d4", "d7d5"},
+		{"d2d4", "g8f6"}, {"c2c4", "e7e5"}, {"g1f3", "d7d5"},
+		{"e2e4", "e7e6"}, {"e2e4", "c7c6"}, {"d2d4", "f7f5"},
+		{"c2c4", "c7c5"},
+	}
+	lines, err := GenOpenings(bases, n, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lines
+}
+
+// comboPairs is the game-pair count per combo match (2 games per pair);
+// override with COMBO_PAIRS to trade runtime for CI width.
+func comboPairs() int {
+	if s := os.Getenv("COMBO_PAIRS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 120
+}
+
+// TestCombinationAB is the combination A/B harness (task #35 deliverable
+// 3): it toggles COUPLED features jointly vs a shared baseline and
+// reports whether a combination's Elo exceeds the sum of its parts'
+// single-toggle Elos (super-additivity — the point of the pruning
+// cluster being conditional on ordering). Slow; run explicitly:
+//
+//	go test ./internal/mirror -run TestCombinationAB -timeout 60m
+//
+// with COMBO_PAIRS set for the desired power. All matches share the seed
+// and opening set, so the deltas are paired.
+func TestCombinationAB(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: self-play matches")
+	}
+	const seed = 6502
+	const depth = 6
+	pairs := comboPairs()
+	workers := 6
+	openings := comboOpenings(t, pairs, seed)
+
+	base := PlayerCfg{Features: FtAll, Weights: DefaultWeights, Depth: depth}
+	// Strong ordering (SEE + history + malus) and an aggressive LMR that
+	// lost Elo under weak ordering in task #28.
+	strongOrd := OrderParams{HistMalus: true}
+	aggrLMR := LMRParams{LateR1: 3, LateR2: 6, MinRemR1: 2, MinRemR2: 4, EvasionPVS: true}
+
+	mkCfg := func(feat byte, ord OrderParams, lmr *LMRParams) PlayerCfg {
+		c := PlayerCfg{Features: feat, Weights: DefaultWeights, Depth: depth, Ord: ord}
+		c.LMR = lmr
+		return c
+	}
+
+	elo := func(name string, a PlayerCfg) float64 {
+		res, err := Match(a, base, openings, pairs, workers, seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, m := res.EloDiff()
+		t.Logf("%-28s %s", name, res)
+		_ = m
+		return e
+	}
+
+	// Single-feature effects vs baseline.
+	eSEE := elo("SEE only", mkCfg(FtAll|FtSEE, OrderParams{}, nil))
+	eHist := elo("history only", mkCfg(FtAll|FtHistory, strongOrd, nil))
+	eLMR := elo("aggr-LMR only", mkCfg(FtAll, OrderParams{}, &aggrLMR))
+
+	// Combinations vs the same baseline.
+	eOrd := elo("SEE+history", mkCfg(FtAll|FtSEE|FtHistory, strongOrd, nil))
+	eOrdLMR := elo("SEE+history+aggrLMR", mkCfg(FtAll|FtSEE|FtHistory, strongOrd, &aggrLMR))
+
+	t.Logf("--- super-additivity (combo vs sum of parts) ---")
+	t.Logf("SEE+history: %.0f vs SEE(%.0f)+hist(%.0f)=%.0f  => %+.0f",
+		eOrd, eSEE, eHist, eSEE+eHist, eOrd-(eSEE+eHist))
+	t.Logf("SEE+history+aggrLMR: %.0f vs ord(%.0f)+lmr(%.0f)=%.0f  => %+.0f",
+		eOrdLMR, eOrd, eLMR, eOrd+eLMR, eOrdLMR-(eOrd+eLMR))
+}
 
 // TestSEE checks the static exchange evaluation against hand-computed and
 // canonical (Stockfish see.cpp) exchange values.
