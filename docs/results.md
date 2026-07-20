@@ -3,6 +3,116 @@
 Newest first. Engine budgets are emulated time (1.0205 MHz); opponent
 controls are wall time. See docs/plan.md for the measurement protocol.
 
+## 2026-07-20 — move-ordering enablers + the ordering×pruning coupling test (task #35)
+
+Built the three ordering enablers in the mirror (internal/mirror/
+ordering.go, behind FtSEE=0x20 / FtHistory=0x40, NOT in FtAll so single-
+toggle A/B measures exactly the ordering change): SEE capture ordering
+(full swap-off with x-ray reveal, TestSEE-validated), butterfly from/to
+history for quiets (depth² bonus, optional gravity malus, per-move
+decay), and a unified scored/sorted full-width move loop (TT-move-first
+verified reliable). Soundness gate: with the heuristic pruners off (pure
+fail-hard αβ) reordering is minimax-invariant across the bench set
+(TestOrderingScoreParity). Baseline and the QS path are untouched.
+
+**Depth-6 node counts vs the FtAll baseline (766,536; TestOrderingNodes):**
+
+| ordering variant           | nodes    |
+|----------------------------|----------|
+| SEE                        | −23.9%   |
+| SEE + losing-caps-last     | −38.0%   |
+| history (+malus)           | −41.9% (−45.3%) |
+| SEE + history              | −46.4%   |
+| SEE + history + malus + LL | **−59.9%** |
+
+Ordering front-loads cutoffs onto the first move — up to a 60% smaller
+tree at the same depth. But at FIXED depth the ordering is Elo-neutral
+(it changes which move cuts, not the minimax result), the do-no-harm
+signature we want from an enabler. Depth-6 self-play, 300 games, seed
+6502, vs the FtAll baseline:
+
+| config (both correct-guard futility) | Elo (300g)  |
+|--------------------------------------|-------------|
+| SEE                                  | **+0 ± 31** |
+| history + malus                      | **+8 ± 30** |
+| SEE + history + malus + losing-last  | **−2 ± 31** |
+
+So the ~24–60% node saving is free (≈that many more reachable nodes at
+1 MHz → depth when banked), bought at no fixed-depth strength cost.
+
+**THE KEY EXPERIMENT — does strong ordering make the task #28 "no-winner"
+LMR variants light up?** Hypothesis (task framing): the LMR sweep found
+nothing because ordering was too weak for deep reductions to be safe.
+Re-ran two of task #28's aggressive LMR variants against the default LMR
+(4,7,3,5), holding ORDERING identical on both sides, weak (FtAll) vs
+strong (SEE+history+malus, 0x7f aord 1,0); 300 games/seed:
+
+| aggressive LMR variant | weak ordering        | strong ordering                |
+|------------------------|----------------------|--------------------------------|
+| late 3,6 (3,6,3,5)     | −6 ± 32 (6502)       | −20 ± 30 (6502), −15 ± 29 (777)|
+| rem1=2 (4,7,2,5)       | −19 ± 31 (6502)      | **−62 ± 30 (6502), −41 ± 31 (777)** |
+
+**Hypothesis FALSIFIED — the coupling is NEGATIVE, not positive.**
+Aggressive LMR does not light up; strong ordering makes it *worse*
+(rem1=2: −19 weak → −62/−41 strong). Mechanism: SEE+history packs the
+genuinely-good moves into ranks 1–3, so lowering the reduction threshold
+to rank 3 (late1=3) or to shallow remaining (rem1=2) now reduces *real*
+candidates; under weak ordering those ranks are a random mix, so the
+same aggression is diluted. The task #28 verdict ("current LMR is
+already well-tuned, no change to port") was NOT a weak-ordering
+artifact — better ordering makes the well-tuned default *more* clearly
+optimal, and reduction thresholds must be tuned TO the ordering, not
+loosened because of it. (Untested axis, knob-limited: deeper *R* for the
+very-late tail — the one direction good ordering might still unlock.)
+
+**Futility re-margining under strong ordering (the task #34 analogue):**
+correct-guard RFP2 250 (over-pruner) vs 500 (adopted), ordering held
+identical both sides, 300 games seed 6502:
+
+| RFP2 250 vs 500 | weak ordering | strong ordering |
+|-----------------|---------------|-----------------|
+| Elo             | −14 ± 31      | −5 ± 30         |
+
+Futility is essentially ordering-DECOUPLED (the +9 shift is well within
+noise; RFP returns before move generation, so ordering can't touch its
+own node). 250 stays ~10–14 Elo worse than 500 regardless — task #34's
+120/500 remains correct; strong ordering does not rescue the tight
+margin. So the two pruners couple to ordering oppositely: LMR strongly &
+negatively (rank-based, so it *is* ordering-sensitive), futility not at
+all.
+
+**Combination A/B harness (TestCombinationAB, COMBO_PAIRS-tunable):**
+toggles coupled features jointly vs a shared baseline and prints each
+combo's Elo against the sum of its parts. Verdict from the data above:
+the "super-additive pruning cluster" premise does not hold here —
+{strong ordering + aggressive LMR} is markedly SUB-additive (−62 vs a
+sum-of-parts ≈ −21), and {SEE + history} is merely additive-neutral
+(−2 vs 0+8). Ordering's payoff is the node saving (→ depth), not a
+strength multiplier on the existing depth-6 pruners.
+
+**PORT RECOMMENDATIONS (ranked; Fable's port-spec queue):**
+1. **History heuristic for quiet ordering** — biggest single node cut
+   (−42%) at +8 ± 30 Elo (neutral-positive), and it needs no exchange
+   arithmetic. 6502 feasibility: the 16 KB butterfly [from][to] table is
+   too big; port as [piece-type][to] (896 bytes) or a compressed
+   from-zone×to table; aging is a cheap LSR sweep. **Adopt first.**
+2. **SEE for capture ordering** — −24% nodes, +0 ± 31 (do-no-harm),
+   stacks with history to −46/−60%. 6502 feasibility: OPEN — SEE uses
+   only adds/table-indexed values (no multiply, so that objection is
+   weaker than feared), but the least-valuable-attacker rescan per swap
+   ply is the real inner-loop cost; needs a careful attacker-gen pass.
+   **Adopt second, after profiling the rescan.** A cheaper MVV-LVA
+   capture sort (adds LVA to the current heavy/light victim split) is a
+   strictly-easier fallback if SEE proves too costly.
+3. **LMR / futility: NO change.** The default LMR (4,7,3,5) and futility
+   (120/500) are confirmed optimal and do not loosen under strong
+   ordering — port them as-is.
+
+Net: adopt the ordering enablers for their node savings (free depth via
+banked time), not for a fixed-depth Elo jump; leave the pruning knobs
+alone. All matches are mirror self-play, depth 6, dither on, vs the
+current-rules baseline; CIs are ~95%.
+
 ## 2026-07-19 — Texel diversified weights: asm rig confirmation (task #23 port) — CONFIRMED, PORT SAFE
 
 Rig-side head-to-head confirming the mirror's diversified-corpus weights
