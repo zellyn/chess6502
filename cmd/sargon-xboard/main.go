@@ -224,11 +224,22 @@ func (e *engine) thinkFirstWhite() {
 	}
 	res, err := e.m.StartAsWhite(e.budgetCycles)
 	if err != nil {
-		e.send("tellusererror sargon-as-white: %v", err)
-		log.Printf("sargon-as-white: %v", err)
+		log.Printf("sargon-as-white failed, resigning: %v", err)
+		e.resign()
 		return
 	}
 	e.send("move %s", e.replyCoord(res))
+}
+
+// resign ends the game by resigning for Sargon's side (a valid claim, unlike a
+// mate claim). Used only as a fallback when a move can't be read, to avoid
+// deadlocking the match.
+func (e *engine) resign() {
+	if e.m != nil && e.m.SargonWhite {
+		e.send("0-1 {SargonIII resigns: move-read failure}") // White resigns
+	} else {
+		e.send("1-0 {SargonIII resigns: move-read failure}") // Black resigns
+	}
 }
 
 // replyCoord converts Sargon's reply to xboard coordinate notation, preferring
@@ -236,11 +247,20 @@ func (e *engine) thinkFirstWhite() {
 // unreliable while Sargon ponders). Falls back to the RAM from/to squares.
 func (e *engine) replyCoord(res sargon.MoveResult) string {
 	sw := e.m != nil && e.m.SargonWhite
-	if c := screenTokenToCoord(res.SargonText, sw); c != "" {
-		return c
-	}
+	// Prefer the RAM-decoded from/to squares — reliable in Easy Mode and immune
+	// to move-list text quirks (truncated promotions, check '+' suffixes). The
+	// screen token is a fallback if the RAM decode is degenerate.
 	mv := res.SargonMove
-	return mv.From.Algebraic() + mv.To.Algebraic() + promoSuffix(res.SargonText)
+	if mv.From.Valid() && mv.To.Valid() && mv.From != mv.To {
+		coord := mv.From.Algebraic() + mv.To.Algebraic()
+		// Promotion: a pawn slot reaching the back rank (Sargon always queens).
+		if mv.MovedIndex >= 0 && sargon.PieceIndexType(mv.MovedIndex%16) == sargon.Pawn &&
+			(mv.To.Rank() == 0 || mv.To.Rank() == 7) {
+			coord += "q"
+		}
+		return coord
+	}
+	return screenTokenToCoord(res.SargonText, sw)
 }
 
 // screenTokenToCoord parses a Sargon move-list token ("E2-E4", "E5XD4",
@@ -299,14 +319,23 @@ func (e *engine) think(coord string) {
 	}
 	if err != nil {
 		// If our move ended the game (mate/stalemate), cutechess already
-		// adjudicated from the move; nothing to send. Otherwise log the error.
+		// adjudicated from the move; nothing to send. Otherwise a move-read
+		// failure would deadlock the match (cutechess waits forever for a
+		// move), so resign to end the game cleanly rather than hang.
 		if res.GameOver {
 			return
 		}
-		e.send("tellusererror submit %q: %v", coord, err)
+		log.Printf("submit %q failed, resigning: %v", coord, err)
+		e.resign()
 		return
 	}
 	reply := e.replyCoord(res)
+	if e.debug {
+		mv := res.SargonMove
+		log.Printf("DECODE token=%q ram=%s-%s idx=%d think=%d -> %q gameover=%v msg=%q",
+			res.SargonText, mv.From.Algebraic(), mv.To.Algebraic(), mv.MovedIndex,
+			res.ThinkCycles, reply, res.GameOver, res.Message)
+	}
 
 	// Emit now unless we're in force mode, in which case hold the reply until
 	// "go" arrives (which will emit it, or clear force so we emit here).

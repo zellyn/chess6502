@@ -168,7 +168,11 @@ func (m *Machine) RequestMove(move string, budgetCycles uint64) (MoveResult, err
 	}
 	if !book {
 		m.ForceMove() // CTRL-T: play best move so far
-		if !m.waitReply(prevReply, 12_000_000) {
+		// Detect the committed move via Sargon's half of the piece list
+		// (robust to repeated move-list tokens, which defeat screen-text
+		// detection in shuffle/repetition positions). Reliable because Easy
+		// Mode stops Sargon pondering once it has moved.
+		if !m.waitSargonMove(mid, 12_000_000) {
 			res.ThinkCycles = m.Cycles() - thinkStart
 			res.Message, res.GameOver = m.scrapeMessage()
 			if res.GameOver {
@@ -179,6 +183,52 @@ func (m *Machine) RequestMove(move string, budgetCycles uint64) (MoveResult, err
 	}
 	res.ThinkCycles = m.Cycles() - thinkStart
 	return m.decodeReply(res, mid), nil
+}
+
+// sargonHalf returns the 16 piece-square bytes belonging to Sargon (white half
+// when Sargon plays White, else the black half).
+func (m *Machine) sargonHalf(pl PieceList) [16]Square {
+	var h [16]Square
+	lo := 16
+	if m.SargonWhite {
+		lo = 0
+	}
+	copy(h[:], pl[lo:lo+16])
+	return h
+}
+
+// waitSargonMove polls up to maxSteps until Sargon's half of the piece list
+// differs from mid and is stable for two consecutive polls — i.e. Sargon has
+// committed a move and (Easy Mode) returned to idle. Immune to repeated
+// move-list text. Returns whether a completed move was detected.
+func (m *Machine) waitSargonMove(mid PieceList, maxSteps uint64) bool {
+	base := m.sargonHalf(mid)
+	last := base
+	changed := false
+	stable := 0
+	var steps uint64
+	for steps < maxSteps {
+		if err := m.Run(pollChunk); err != nil {
+			return false
+		}
+		steps += pollChunk
+		cur := m.sargonHalf(m.ReadPieceList())
+		if !changed && cur != base {
+			changed = true
+		}
+		if changed {
+			if cur == last {
+				stable++
+			} else {
+				stable = 0
+			}
+			if stable >= 2 {
+				return true
+			}
+		}
+		last = cur
+	}
+	return changed
 }
 
 // enterMove settles, types the player move, and confirms it registered (the
@@ -335,7 +385,7 @@ func (m *Machine) StartAsWhite(budgetCycles uint64) (MoveResult, error) {
 		}
 		if !book {
 			m.ForceMove() // CTRL-T
-			if !m.waitReply(prevReply, 12_000_000) {
+			if !m.waitSargonMove(mid, 12_000_000) {
 				res.ThinkCycles = m.Cycles() - thinkStart
 				res.Message, res.GameOver = m.scrapeMessage()
 				return res, fmt.Errorf("no opening move from sargon-as-white")
@@ -389,11 +439,13 @@ func (m *Machine) scrapeReplyText() string {
 }
 
 // scrapeMoveColumn returns the bottom-most non-empty move token in the left
-// (rightCol=false, cols 10-15) or right (rightCol=true, cols 22-27) column.
+// (rightCol=false) or right (rightCol=true) column. Windows are 8 chars wide so
+// a promotion token like "G2-G1/Q" (7 chars) is not truncated (which would drop
+// the promotion piece and emit an illegal non-promoting move).
 func (m *Machine) scrapeMoveColumn(rightCol bool) string {
-	lo, hi := 10, 16
+	lo, hi := 10, 18
 	if rightCol {
-		lo, hi = 22, 28
+		lo, hi = 22, 30
 	}
 	last := ""
 	for r := 10; r < 24; r++ {
