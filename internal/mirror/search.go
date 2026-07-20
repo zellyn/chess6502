@@ -4,16 +4,66 @@ package mirror
 // fixed-depth mode: a single iterate at the cap). It returns the root
 // best move (NoMove if no legal moves) and the root score.
 func (e *Engine) SearchFixed(depth int) (Move, int) {
-	e.MaxDepth = depth
-	e.Pos.Ply = 0
-	e.Best = NoMove
+	e.NodeBudget = 0
+	e.newMove()
+	e.iterate(depth)
+	return e.Best, e.RootScore
+}
+
+// SearchBudget runs the asm driver's node-budgeted iterative-deepening
+// mode: deepen depth 1,2,... reusing killers/history/TT across
+// iterations, spending up to budget nodes for this move, then play the
+// best move from the last COMPLETED iteration. maxDepth caps the ID loop
+// (a safety ceiling; the budget normally stops it first). It returns the
+// root best move (NoMove only if the position has no legal moves) and
+// score.
+//
+// Policy (mirrors docs/plan.md D9, single-cap variant): begin a new
+// iteration only while under ~50% of the budget (a deeper iteration
+// roughly multiplies node count, so past the halfway mark the next one
+// would blow the budget); a hard cap at `budget` aborts an in-progress
+// iteration, whose partial result is DISCARDED in favor of the last
+// completed iteration. Depth 1 always runs to completion (uncapped) so a
+// move is always produced. Deterministic given (position, budget,
+// features, dither seed): the budget is denominated in nodes, never wall
+// time, so an A/B replay is bit-identical.
+func (e *Engine) SearchBudget(budget uint64, maxDepth int) (Move, int) {
+	e.Nodes = 0 // per-move node accounting for the budget
+	e.newMove()
+	best, bestScore := NoMove, 0
+	for d := 1; d <= maxDepth; d++ {
+		if d > 1 {
+			// Soft start gate: skip a new iteration past the halfway mark.
+			if e.Nodes*2 >= budget {
+				break
+			}
+			e.NodeBudget = budget // hard cap for this (and later) iterations
+		} else {
+			e.NodeBudget = 0 // depth 1 always completes
+		}
+		e.iterate(d)
+		if e.aborted {
+			break // incomplete iteration: keep the last completed result
+		}
+		best, bestScore = e.Best, e.RootScore
+		if best.From == NoSq {
+			break // no legal moves (mate/stalemate): deeper won't help
+		}
+	}
+	e.NodeBudget = 0
+	return best, bestScore
+}
+
+// newMove resets the per-move ordering state (killers cleared, history
+// decayed so stale scores fade but useful ordering carries across the
+// game). Called once per root move, before the (possibly iterated)
+// search — killers/history then persist across ID iterations.
+func (e *Engine) newMove() {
 	e.killer = [MaxPly][2]Move{}
 	if e.Features&FtHistory != 0 {
 		if e.hist == nil {
 			e.hist = &[2][128][128]int32{}
 		} else {
-			// Decay between moves so stale scores fade but useful
-			// ordering carries across the game.
 			for s := range e.hist {
 				for f := range e.hist[s] {
 					for t := range e.hist[s][f] {
@@ -23,17 +73,31 @@ func (e *Engine) SearchFixed(depth int) (Move, int) {
 			}
 		}
 	}
+}
+
+// iterate runs one full-window search to the given depth.
+func (e *Engine) iterate(depth int) {
+	e.MaxDepth = depth
+	e.Pos.Ply = 0
+	e.Best = NoMove
+	e.aborted = false
 	e.inChk[0] = e.curInCheck()
 	e.alpha[0] = -Inf
 	e.beta[0] = Inf
 	e.RootScore = e.search()
-	return e.Best, e.RootScore
 }
 
 // search mirrors asm search.s node for node. Fail-hard negamax with
 // quiescence; scores are from the side to move's POV.
 func (e *Engine) search() int {
+	if e.aborted {
+		return 0 // unwinding after a node-budget hard abort
+	}
 	e.Nodes++
+	if e.NodeBudget != 0 && e.Nodes >= e.NodeBudget {
+		e.aborted = true // spent the per-move budget: abandon this iteration
+		return 0
+	}
 	p := &e.Pos
 	ply := p.Ply
 
@@ -305,6 +369,9 @@ func (e *Engine) moveLoop() int {
 					score = -e.search()
 				}
 				e.unmake()
+				if e.aborted {
+					return e.alpha[ply] // node budget hit: unwind (result discarded)
+				}
 				if mode == 0 || score <= e.alpha[ply] {
 					break // full-window result, or scout failed low: final
 				}
@@ -436,6 +503,9 @@ func (e *Engine) ttprobe() (*ttEntry, int, bool) {
 // ttstore writes an always-replace entry; depth = MaxDepth - Ply
 // clamped to 0..31, mate scores converted to node-relative.
 func (e *Engine) ttstore(bound int, from, to byte, score int) {
+	if e.aborted {
+		return // don't poison the TT with garbage scores while unwinding
+	}
 	p := &e.Pos
 	depth := e.MaxDepth - p.Ply
 	if depth < 0 {

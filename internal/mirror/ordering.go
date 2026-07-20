@@ -347,6 +347,9 @@ func (e *Engine) orderedMoveLoop() int {
 				score = -e.search()
 			}
 			e.unmake()
+			if e.aborted {
+				return e.alpha[ply] // node budget hit: unwind (result discarded)
+			}
 			if mode == 0 || score <= e.alpha[ply] {
 				break
 			}

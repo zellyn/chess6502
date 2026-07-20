@@ -143,7 +143,9 @@ func tune(args []string) {
 
 func match(args []string) {
 	fs := flag.NewFlagSet("match", flag.ExitOnError)
-	depth := fs.Int("depth", 5, "fixed depth")
+	depth := fs.Int("depth", 5, "fixed depth (fixed-depth mode)")
+	budget := fs.Uint64("budget", 0, "per-move NODE budget (>0 selects node-budgeted iterative-deepening mode; both sides equal)")
+	maxiters := fs.Int("maxiters", 0, "ID depth ceiling in budget mode (0 = MaxPly-1)")
 	pairs := fs.Int("pairs", 150, "game pairs (2 games each)")
 	workers := fs.Int("workers", runtime.NumCPU()-2, "parallel pairs")
 	seed := fs.Uint64("seed", 6502, "RNG seed")
@@ -168,15 +170,21 @@ func match(args []string) {
 	lines, err := mirror.GenOpenings(sprt.Openings, *pairs, *seed)
 	check(err)
 	a := mirror.PlayerCfg{Features: byte(*aMask), Weights: parseWeights(*aw), Depth: *depth,
-		FixFutility: *aFix, LMR: parseLMR(*aLMR), QS: parseQS(*aQS), KB: loadKB(*aKB), Fut: parseFut(*aFut), Ord: parseOrd(*aOrd)}
+		FixFutility: *aFix, LMR: parseLMR(*aLMR), QS: parseQS(*aQS), KB: loadKB(*aKB), Fut: parseFut(*aFut), Ord: parseOrd(*aOrd),
+		NodeBudget: *budget, MaxIters: *maxiters}
 	b := mirror.PlayerCfg{Features: byte(*bMask), Weights: parseWeights(*bw), Depth: *depth,
-		FixFutility: *bFix, LMR: parseLMR(*bLMR), QS: parseQS(*bQS), KB: loadKB(*bKB), Fut: parseFut(*bFut), Ord: parseOrd(*bOrd)}
+		FixFutility: *bFix, LMR: parseLMR(*bLMR), QS: parseQS(*bQS), KB: loadKB(*bKB), Fut: parseFut(*bFut), Ord: parseOrd(*bOrd),
+		NodeBudget: *budget, MaxIters: *maxiters}
 	start := time.Now()
 	res, err := mirror.Match(a, b, lines, *pairs, *workers, *seed)
 	check(err)
-	fmt.Printf("A(%#02x %s fix=%v lmr=%q qs=%q) vs B(%#02x %s fix=%v lmr=%q qs=%q) depth %d: %s (%v)\n",
-		byte(*aMask), *aw, *aFix, *aLMR, *aQS, byte(*bMask), *bw, *bFix, *bLMR, *bQS,
-		*depth, res, time.Since(start).Round(time.Second))
+	mode := fmt.Sprintf("depth %d", *depth)
+	if *budget > 0 {
+		mode = fmt.Sprintf("budget %d nodes/move (maxiters %d)", *budget, *maxiters)
+	}
+	fmt.Printf("A(%#02x %s fix=%v lmr=%q qs=%q ord=%q) vs B(%#02x %s fix=%v lmr=%q qs=%q ord=%q) %s: %s (%v)\n",
+		byte(*aMask), *aw, *aFix, *aLMR, *aQS, *aOrd, byte(*bMask), *bw, *bFix, *bLMR, *bQS, *bOrd,
+		mode, res, time.Since(start).Round(time.Second))
 }
 
 // loadKB loads a king-bucket table file, or nil when path is empty.

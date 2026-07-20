@@ -11,6 +11,13 @@ type Engine struct {
 	MaxDepth int
 	Nodes    uint64
 
+	// NodeBudget is the per-move hard node cap for SearchBudget's
+	// iterative deepening (0 = no cap, i.e. fixed-depth mode). When Nodes
+	// reaches it mid-iteration, aborted is set and search() unwinds; the
+	// incomplete iteration's result is discarded.
+	NodeBudget uint64
+	aborted    bool
+
 	// FixFutilityGuard forces the signed-aware RFP/futility guard on
 	// (equivalent to Fut.CorrectGuard). Kept for the original guard A/B;
 	// prefer Fut for margin experiments.

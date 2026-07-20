@@ -19,6 +19,14 @@ type PlayerCfg struct {
 	Fut         *FutilityParams
 	KB          *KBTables
 	Ord         OrderParams
+
+	// NodeBudget selects the node-budgeted iterative-deepening mode: when
+	// > 0, each move runs SearchBudget(NodeBudget, MaxIters) instead of
+	// the fixed-depth SearchFixed(Depth). This is the mode that lets node-
+	// saving features (ordering, QS shaping, LMR) convert their savings
+	// into extra search depth, which fixed-depth self-play cannot see.
+	NodeBudget uint64
+	MaxIters   int // ID depth ceiling for budgeted mode (0 => MaxPly-1)
 }
 
 func (c *PlayerCfg) engine() *Engine {
@@ -123,7 +131,17 @@ func PlayGame(white, black PlayerCfg, opening []string, rnd *rand.Rand, collect 
 		}
 
 		eng.Seed = byte(rnd.IntN(255)) + 1 // dither on
-		best, score := eng.SearchFixed(cfg.Depth)
+		var best Move
+		var score int
+		if cfg.NodeBudget > 0 {
+			maxIters := cfg.MaxIters
+			if maxIters <= 0 {
+				maxIters = MaxPly - 1
+			}
+			best, score = eng.SearchBudget(cfg.NodeBudget, maxIters)
+		} else {
+			best, score = eng.SearchFixed(cfg.Depth)
+		}
 		if best.From == NoSq {
 			if inChk { // checkmate: side to move loses
 				if gp.Side == 0 {
@@ -286,12 +304,17 @@ func Match(a, b PlayerCfg, openings [][]string, pairs, workers int, seed uint64)
 	res := &MatchResult{}
 	var firstErr error
 	var wg sync.WaitGroup
-	for w := range workers {
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rnd := rand.New(rand.NewPCG(seed, uint64(w)^0x9e3779b97f4a7c15))
 			for pair := range jobs {
+				// Seed dither per PAIR, not per worker: a pair's random
+				// stream is then a pure function of (seed, pair), so the
+				// match result is fully reproducible regardless of how the
+				// worker pool schedules pairs. (Per-worker seeding made the
+				// dither depend on nondeterministic work-stealing order.)
+				rnd := rand.New(rand.NewPCG(seed, uint64(pair)*0x9e3779b97f4a7c15+0x1234567))
 				opening := openings[pair%len(openings)]
 				g1, err1 := PlayGame(a, b, opening, rnd, false) // A white
 				g2, err2 := PlayGame(b, a, opening, rnd, false) // A black
