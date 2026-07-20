@@ -74,7 +74,7 @@ gswalk: clc
         and #COLORMASK
         beq gsnextdir           ; own piece: stop
         lda #0
-        jsr emitmove            ; capture: emit, then stop
+        EMITJSR                 ; capture: emit, then stop
         jmp gsnextdir
 gsempty:
 .if ::QMODE = 0
@@ -120,7 +120,7 @@ gstloop:
         and #COLORMASK
         beq gstnext             ; own piece
         lda #0
-        jsr emitmove
+        EMITJSR
         jmp gstnext
 gstquiet:
 .if ::QMODE = 0
@@ -319,14 +319,14 @@ gwcap1: clc
         cmp #$70
         beq gwc1promo
         lda #0
-        jmp emitmove
+        EMITJMP
 gwc1promo:
         jmp promoloop
 gwc1ep: lda GTO
         cmp EPSQ
         bne gwc1out
         lda #FL_EP
-        jmp emitmove
+        EMITJMP
 gwc1out:
         rts
 
@@ -387,12 +387,12 @@ gbcap1: clc
         jmp promoloop
 gbc1nopromo:
         lda #0
-        jmp emitmove
+        EMITJMP
 gbc1ep: lda GTO
         cmp EPSQ
         bne gbc1out
         lda #FL_EP
-        jmp emitmove
+        EMITJMP
 gbc1out:
         rts
 
@@ -401,9 +401,33 @@ promoloop:
         lda #KNIGHT
         sta PROMTYPE
 prloop: lda PROMTYPE
-        jsr emitmove
+        EMITJSR
         inc PROMTYPE
         lda PROMTYPE
         cmp #QUEEN+1
         bne prloop
         rts
+
+.if ::QMODE = 1
+; ---- recap2 filter (quiescence copy only) ----
+; qemit: gate a candidate capture/promotion before emitmove. When
+; RECAPONLY is clear (qs plies < RecapAfter) every move passes; when
+; set, only moves whose destination (GTO) is RECAPSQ survive. Reached
+; by both jsr (slider/step/promo) and jmp (pawn tail) call sites; the
+; jmp-to-emitmove tail and the drop-rts both return to the grandparent
+; exactly as the original `jmp emitmove` did.
+; A holds the move flags on entry (emitmove needs them); save across the
+; test since the RECAPONLY/GTO loads clobber it.
+qemit:  pha
+        lda RECAPONLY
+        beq qemitgo             ; recap gate off: emit unconditionally
+        lda GTO
+        cmp RECAPSQ
+        bne qemitno             ; not a recapture: drop it
+qemitgo:
+        pla                     ; restore flags for emitmove
+        jmp emitmove
+qemitno:
+        pla                     ; discard flags; drop the move
+        rts
+.endif

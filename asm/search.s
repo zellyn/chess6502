@@ -25,7 +25,24 @@ gennode:
         sta CURSORHI,y
         lda QSKIND,y
         beq :+
-        jsr generateq
+        ; recap2 gate: past RecapAfter=2 qs plies, restrict generateq
+        ; to recaptures onto the previous move's TO (UNDOTO[PLY-1]).
+        ; qs depth = PLY - MAXDEPTH (>= 0 here; MAXDEPTH is constant
+        ; through a qs subtree - qs does no null/LMR reductions).
+        lda #0
+        sta RECAPONLY
+        lda PLY
+        sec
+        sbc MAXDEPTH
+        cmp #2                  ; RecapAfter = 2
+        bcc genq                ; qs depth 0/1: full-width captures
+        ldx PLY
+        dex
+        lda UNDOTO,x            ; square the previous move landed on
+        sta RECAPSQ
+        lda #1
+        sta RECAPONLY
+genq:   jsr generateq
         jmp gennd2
 :       jsr generate
 gennd2: ldy PLY

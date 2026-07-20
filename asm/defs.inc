@@ -83,6 +83,9 @@ CRTMP     = $29         ; castle helpers: rook piece byte
 ATT78     = $2A         ; attacked(): ATSQ + $78 ($77 + 1 for the
                         ;  carry-clear complement-add diff trick)
 VICTIM    = $2B         ; make: captured piece byte
+RECAPSQ   = $0C         ; recap2 qs gate: target square recaptures must hit
+RECAPONLY = $0D         ; recap2 qs gate: nonzero -> generateq emits only
+                        ;  captures landing on RECAPSQ (prev move's TO)
 
 BOARD     = $40         ; 128-byte 0x88 board, $40..$BF. The 64 off-board
                         ;  bytes (files 8-F of each rank: $48-4F,58-5F,68-6F,
