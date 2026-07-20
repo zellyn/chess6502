@@ -62,6 +62,10 @@ atwalk: clc
         cmp ATSQ
         beq athit
         tay
+        ; UNMASKED board read: safe only because this ray walks BETWEEN two
+        ; on-board squares and exits at ATSQ before leaving the board (every
+        ; square colinear between two on-board squares is on-board). See the
+        ; off-board dead-space contract at BOARD in defs.inc.
         lda a:BOARD,y
         bne atnext              ; blocked
         tya
@@ -337,6 +341,8 @@ ckwalk: clc
         cmp ATSQ
         beq ckhit
         tax
+        ; UNMASKED board read: safe only by colinear termination at ATSQ (an
+        ; on-board target); see the off-board dead-space contract at BOARD.
         lda BOARD,x
         bne cknodir             ; blocked
         txa

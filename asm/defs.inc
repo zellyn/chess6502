@@ -84,7 +84,15 @@ ATT78     = $2A         ; attacked(): ATSQ + $78 ($77 + 1 for the
                         ;  carry-clear complement-add diff trick)
 VICTIM    = $2B         ; make: captured piece byte
 
-BOARD     = $40         ; 128-byte 0x88 board, $40..$BF
+BOARD     = $40         ; 128-byte 0x88 board, $40..$BF. The 64 off-board
+                        ;  bytes (files 8-F of each rank: $48-4F,58-5F,68-6F,
+                        ;  78-7F,88-8F,98-9F,A8-AF,B8-BF) are FREE for scratch,
+                        ;  BUT only while every board read is (a) a piece/move-
+                        ;  list square, (b) `and #$88`-masked before the read,
+                        ;  or (c) a ray that terminates on-board (atwalk/ckwalk
+                        ;  in board.s). Any NEW board-neighbor read (king
+                        ;  zone/shield), 0..127 scan, or copy-make MUST mask
+                        ;  file>=8 first or it will read scratch as board data.
 
 ; ---- Search/eval zero page ($C0-$FF) ----
 SCORE     = $C0         ; 16-bit: search/eval return value
