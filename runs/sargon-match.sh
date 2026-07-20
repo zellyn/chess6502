@@ -38,9 +38,11 @@ EOF
 chmod +x "$OUT/run-us.sh" "$OUT/run-sargon.sh"
 
 echo "starting cutechess at $(date)"
+# restart=on for Sargon: cutechess starts a fresh sargon-xb process each game,
+# so Sargon boots clean every time (an in-process reboot corrupts the emulator).
 "$REPO/tools/cutechess-cli" \
   -engine name=us cmd="$OUT/run-us.sh" proto=uci \
-  -engine name=SargonIII cmd="$OUT/run-sargon.sh" proto=xboard \
+  -engine name=SargonIII cmd="$OUT/run-sargon.sh" proto=xboard restart=on \
   -each tc=inf -rounds "$ROUNDS" -games 2 -maxmoves 160 -ratinginterval 1 \
   -pgnout "$OUT/sargon-match.pgn" || true
 

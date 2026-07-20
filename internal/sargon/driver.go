@@ -320,12 +320,15 @@ func (m *Machine) enterMove(move string) (mid PieceList, prevReply string, err e
 				return mid, "", err
 			}
 			s += pollChunk
-			// Piece-list byte for global index fromIdx lives at $60+fromIdx.
-			if Square(m.A2.RamRead(uint16(PieceListAddr+fromIdx))) == to {
+			// Accept when any of our pieces has reached the destination. Using
+			// "any piece on `to`" (not the specific slot) handles promotions,
+			// where the pawn leaves its slot for the promoted-piece slot.
+			if m.anyPieceAt(to, oppBlack) {
 				accepted = true
 				break
 			}
 		}
+		_ = fromIdx
 	}
 	if !accepted {
 		return mid, "", fmt.Errorf("move %q not accepted after retries (screen: %q)", move, m.messageLine())
@@ -365,6 +368,21 @@ func (m *Machine) decodeReply(res MoveResult, mid PieceList) MoveResult {
 	res.Board = after
 	res.Message, res.GameOver = m.scrapeMessage()
 	return res
+}
+
+// anyPieceAt reports whether any piece in the given color half currently sits
+// on square sq (read live from the piece list in RAM).
+func (m *Machine) anyPieceAt(sq Square, black bool) bool {
+	lo, hi := 0, 16
+	if black {
+		lo, hi = 16, 32
+	}
+	for i := lo; i < hi; i++ {
+		if Square(m.A2.RamRead(uint16(PieceListAddr+i))) == sq {
+			return true
+		}
+	}
+	return false
 }
 
 // pieceIndexAt returns the global piece-list index (0-15 white, 16-31 black)

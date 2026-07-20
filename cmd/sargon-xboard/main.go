@@ -218,6 +218,7 @@ func (e *engine) doUserMove(coord string) {
 // thinkFirstWhite handles the engine-plays-White case: Sargon takes White via
 // CTRL-S and plays the opening move, which is emitted as our move.
 func (e *engine) thinkFirstWhite() {
+	defer e.recoverResign("thinkFirstWhite")
 	if err := e.ensureBooted(); err != nil {
 		e.send("tellusererror boot failed: %v", err)
 		return
@@ -251,14 +252,22 @@ func (e *engine) claimGameOver(res sargon.MoveResult) {
 	e.resign()
 }
 
-// resign resigns for Sargon's side (a valid claim). Used when Sargon is mated
-// or a move can't be read, to end the game rather than deadlock the match.
-func (e *engine) resign() {
-	if e.m != nil && e.m.SargonWhite {
-		e.send("0-1 {SargonIII resigns}") // White resigns
-	} else {
-		e.send("1-0 {SargonIII resigns}") // Black resigns
+// recoverResign turns a panic in a think goroutine into a resignation, so a
+// bug can't crash the process mid-match (which cutechess sees as a disconnect
+// and forfeits). Deferred at the top of each think goroutine.
+func (e *engine) recoverResign(where string) {
+	if r := recover(); r != nil {
+		log.Printf("panic in %s: %v; resigning", where, r)
+		e.resign()
 	}
+}
+
+// resign resigns for Sargon's side via the CECP "resign" command (cutechess
+// attributes it to this engine). A result string like "1-0 {...}" is a *claim*
+// that cutechess validates against the board and rejects ("invalid result
+// claim") when the game isn't actually over, so it must not be used to resign.
+func (e *engine) resign() {
+	e.send("resign")
 }
 
 // replyCoord converts Sargon's reply to xboard coordinate notation, preferring
@@ -323,6 +332,7 @@ func screenTokenToCoord(tok string, sargonWhite bool) string {
 }
 
 func (e *engine) think(coord string) {
+	defer e.recoverResign("think")
 	if err := e.ensureBooted(); err != nil {
 		e.send("tellusererror boot failed: %v", err)
 		log.Printf("boot failed: %v", err)
